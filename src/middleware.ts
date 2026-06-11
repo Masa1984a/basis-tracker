@@ -21,8 +21,10 @@ export function middleware(req: NextRequest) {
 
 // cron が叩く /api/market・/api/basis は Basic 認証の対象外。
 // ただし秘匿情報を受け取る /api/basis/seed は保護対象に残す(api/basis(?!/seed))。
+// PWA 静的アセット(manifest/sw/offline/icons)も対象外。SW はインストール時に
+// 認証情報なしで取得するため、ここを保護すると 401 でインストールが壊れる。非機密なので公開で可。
 export const config = {
   matcher: [
-    "/((?!api/market|api/basis(?!/seed)|_next/static|_next/image|favicon.ico).*)",
+    "/((?!api/market|api/basis(?!/seed)|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|offline.html|icons/).*)",
   ],
 };

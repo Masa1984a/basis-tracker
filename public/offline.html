@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>オフライン — BASIS TRACKER</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        background: #0b0e11;
+        color: #e6eaef;
+        font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      }
+      .box { padding: 24px; }
+      .brand {
+        font-family: ui-monospace, Menlo, monospace;
+        letter-spacing: 0.18em;
+        font-size: 12px;
+        color: #e2a33c;
+      }
+      h1 { font-size: 18px; margin: 12px 0 6px; }
+      p { color: #8a94a3; font-size: 14px; }
+      button {
+        margin-top: 16px;
+        background: transparent;
+        border: 1px solid #e2a33c;
+        color: #e2a33c;
+        border-radius: 8px;
+        padding: 10px 18px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <div class="brand">BASIS TRACKER</div>
+      <h1>オフラインです</h1>
+      <p>ネットワークに接続できませんでした。<br />接続を確認して再読み込みしてください。</p>
+      <button onclick="location.reload()">再読み込み</button>
+    </div>
+  </body>
+</html>
