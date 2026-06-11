@@ -54,14 +54,16 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10); // スナップショット(累積値)の日付 = 実行日(UTC)
+  // 日次リワードは「稼いだ日」=前日に帰属させる。00:15実行時の累積差分は前日1日ぶんの増分なので。
+  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
 
-  // 資産別の日次行を upsert しつつ、当日のリワード(前日比 Δtotal_pnl)を集計
+  // 資産別の日次スナップショットを upsert しつつ、前日ぶんの実測リワード(Δtotal_pnl)を集計
   let totalStakedUsd = 0;
   let totalPnlUsd = 0;
-  let dailyRewardUsd = 0; // 当日リワードUSD合計(資産ごとに delta or nominal を使い分けた和)
-  let usedDelta = 0;
-  let usedNominal = 0;
+  let dailyRewardUsd = 0; // 前日の実測リワードUSD合計(累積 total_pnl の差分のみ)
+  let measuredAssets = 0; // 前日比の差分が取れた資産数(0なら初回=基準のみでリワード未記録)
   const perAsset: Record<string, unknown> = {};
 
   for (const a of ASSETS) {
@@ -81,31 +83,24 @@ export async function GET(req: NextRequest) {
     const stakedUsd = price != null ? staked * price : null;
     const pnlUsd = price != null ? totalPnl * price : null;
 
-    // 当日リワードを資産ごとに算出: 前日(date < today)の最新 total_pnl があれば
-    // Δtotal_pnl、無ければ名目(staked×daily_roi)。資産ごとに基準を決めるので、
-    // 新規資産が既存資産と混在しても取りこぼさない(過少計上を防ぐ)。
+    // 前日ぶんの実測リワード = 累積 total_pnl の差分(date < today の最新スナップショットとの差)。
+    // 前日データが無い資産(初回/新規)は「未測定」とし、名目では埋めない(推定値を実測日に混ぜない)。
     const prev = await sql<{ total_pnl: number }>`
       select total_pnl::float8 as total_pnl from basis_staking_daily
       where asset = ${a.st} and date < ${today}
       order by date desc limit 1`;
-    let rewardCrypto: number | null = null;
-    let rewardUsd: number | null = null;
-    let basis: "delta" | "nominal" | null = null;
+    let rewardCrypto: number | null = null; // 生の差分(claim等で負もあり得る)
+    let rewardUsd: number | null = null; // 前日ぶんのリワードUSD(負は0に丸め)
     if (prev.rows[0]?.total_pnl != null) {
-      rewardCrypto = totalPnl - Number(prev.rows[0].total_pnl); // 生の差分(claim等で負もあり得る)
-      if (price != null) rewardUsd = Math.max(0, rewardCrypto) * price; // 負(出金等)は0に丸め
-      basis = "delta";
-      usedDelta++;
-    } else if (stakedUsd != null) {
-      rewardUsd = (stakedUsd * dailyRoi) / 100; // 前日データ無し(初回/新規資産)→ 名目で代替
-      basis = "nominal";
-      usedNominal++;
+      rewardCrypto = totalPnl - Number(prev.rows[0].total_pnl);
+      if (price != null) rewardUsd = Math.max(0, rewardCrypto) * price;
+      if (rewardUsd != null) dailyRewardUsd += rewardUsd;
+      measuredAssets++;
     }
-    if (rewardUsd != null) dailyRewardUsd += rewardUsd;
     if (stakedUsd != null) totalStakedUsd += stakedUsd;
     if (pnlUsd != null) totalPnlUsd += pnlUsd;
 
-    perAsset[a.st] = { staked, totalPnl, dailyRoi, price, stakedUsd, rewardCrypto, rewardUsd, basis };
+    perAsset[a.st] = { staked, totalPnl, dailyRoi, price, stakedUsd, rewardCrypto, rewardUsd };
 
     await sql`
       insert into basis_staking_daily
@@ -137,23 +132,25 @@ export async function GET(req: NextRequest) {
        ${round2(totalStakedUsd)},
        ${JSON.stringify({ source: "basis-api", date: today, perAsset, prices, able: data.able })})`;
 
-  // 当日のリワードを daily_rewards に記録(資産ごとの delta/nominal を合算)。
-  const rewardBasis = usedDelta && usedNominal ? "mixed" : usedDelta ? "delta" : "nominal";
+  // 前日ぶんの実測リワードを「前日付」で daily_rewards に記録。
+  // 差分が取れた資産が1つも無い場合(初回=基準スナップショットを置いただけ)は記録しない
+  //(推定値で過去日を埋めない)。
   const profitUsd = round3(dailyRewardUsd) ?? 0;
-  // ステークがある日は連続性のため必ず記録(0でも欠落させない)。完全に未ステークの日のみスキップ。
-  if (totalStakedUsd > 0) {
+  let rewardDate: string | null = null;
+  if (measuredAssets > 0) {
     await sql`
       insert into daily_rewards (date, profit_usd, source)
-      values (${today}, ${profitUsd}, ${"api"})
+      values (${yesterday}, ${profitUsd}, ${"api"})
       on conflict (date) do update set
         profit_usd = excluded.profit_usd, source = excluded.source, updated_at = now()`;
+    rewardDate = yesterday;
   }
 
   return NextResponse.json({
     ok: true,
-    date: today,
-    reward_basis: rewardBasis,
-    profit_usd: profitUsd,
+    run_date: today, // 実行日(スナップショットの日付)
+    reward_date: rewardDate, // リワードを帰属させた日=前日。初回など未測定時は null
+    profit_usd: rewardDate ? profitUsd : null,
     total_staked_usd: round2(totalStakedUsd),
     total_rewards_usd: round2(totalPnlUsd),
     total_rewards_pct: totalRewardsPct,

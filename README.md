@@ -56,6 +56,12 @@ DRRの推移と相場(BTC価格)との連動性を観察するための個人用
 `snapshots` / `daily_rewards`(USD建て、`source='api'`)に書き込むので既存ダッシュボードが
 そのまま使える。資産別の忠実な記録は `basis_staking_daily`(暗号建て)に残す。
 
+**日次リワードの帰属**: cron(00:15 UTC)実行時に「累積 total_pnl の前回スナップショットからの増分」
+= 前日1日ぶんの報酬を計算し、**稼いだ日(=前日)付**で `daily_rewards` に記録する(実行日付ではない)。
+同じ前日付の BTC 価格と正しく対応する。差分が取れない初回は基準スナップショットを置くだけで
+リワードは記録しない(推定値で過去日を埋めない)。`basis_staking_daily` の累積スナップショットは
+実行日付。レスポンスの `reward_date` が帰属日、`run_date` が実行日。
+
 ### セットアップ
 
 1. `db/schema.sql` を再実行(`basis_session` / `basis_staking_daily` が追加される)
