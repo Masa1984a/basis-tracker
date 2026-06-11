@@ -1,0 +1,23 @@
+# dependencies / build
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+
+# env(秘匿)
+.env*.local
+.env
+
+# === basis Path B の機微データ(絶対にコミットしない)===
+# Privy refresh_token / session_id / ネットワークキャプチャ(認証トークン入り)
+debug/
+# ブラウザの専用プロファイル(ログインセッション・Cookie)
+.pw-basis-profile/
+
+# python
+tools/__pycache__/
+*.pyc
+
+# misc
+*.log
+.DS_Store
