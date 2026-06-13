@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@vercel/postgres";
+import { encryptSecret } from "@/lib/crypto";
 
 export const runtime = "nodejs";
 
@@ -22,9 +23,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // SESSION_ENC_KEY 設定時はトークンを暗号化して保存(session_id は平文のまま)。
+  const encRefresh = encryptSecret(refresh_token);
+  const encAccess = encryptSecret(privy_access_token ?? null);
   await sql`
     insert into basis_session (id, refresh_token, privy_access_token, session_id, status, last_error, updated_at)
-    values (1, ${refresh_token}, ${privy_access_token ?? null}, ${session_id}, 'active', null, now())
+    values (1, ${encRefresh}, ${encAccess}, ${session_id}, 'active', null, now())
     on conflict (id) do update set
       refresh_token = excluded.refresh_token,
       privy_access_token = excluded.privy_access_token,

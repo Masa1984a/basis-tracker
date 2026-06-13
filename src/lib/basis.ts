@@ -1,4 +1,5 @@
 import { sql } from "@vercel/postgres";
+import { encryptSecret, decryptSecret } from "@/lib/crypto";
 
 // basis.pro 内部API(Path B)クライアント。
 // 認証は Privy。/sessions で privy_access_token を更新し、それを Bearer として
@@ -54,14 +55,21 @@ export async function loadSession(): Promise<BasisSession | null> {
     from basis_session where id = 1`;
   const r = rows[0];
   if (!r?.refresh_token || !r?.session_id) return null;
-  return r;
+  // 保存時に暗号化されたトークンは復号して返す(平文のままのデータはそのまま通る)。
+  // session_id は単体では無力のため平文のまま扱う。
+  return {
+    refresh_token: decryptSecret(r.refresh_token) as string,
+    privy_access_token: decryptSecret(r.privy_access_token),
+    session_id: r.session_id,
+  };
 }
 
 async function persistTokens(refreshToken: string, privyAccessToken: string | null) {
+  // SESSION_ENC_KEY 設定時は暗号化して保存(未設定なら平文のまま= encryptSecret が素通し)。
   await sql`
     update basis_session
-      set refresh_token = ${refreshToken},
-          privy_access_token = ${privyAccessToken},
+      set refresh_token = ${encryptSecret(refreshToken)},
+          privy_access_token = ${encryptSecret(privyAccessToken)},
           status = 'active', last_error = null, updated_at = now()
     where id = 1`;
 }
