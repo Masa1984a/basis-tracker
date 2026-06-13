@@ -46,10 +46,12 @@ export async function GET() {
     updated_at: string;
     has_refresh: boolean;
     has_session: boolean;
+    token_encrypted: boolean;
   }>`
     select status, last_error, updated_at::text as updated_at,
            (refresh_token is not null) as has_refresh,
-           (session_id is not null) as has_session
+           (session_id is not null) as has_session,
+           (refresh_token like 'enc:v1:%') as token_encrypted
     from basis_session where id = 1`;
   if (!rows[0]) return NextResponse.json({ seeded: false });
   return NextResponse.json({ seeded: true, ...rows[0] });
