@@ -1,11 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@vercel/postgres";
 
 export const runtime = "nodejs";
 
 // Vercel Cron (毎日 00:05 UTC) から呼ばれ、BTC価格を記録する。
-// 手動アクセスでも即時更新できる。
-export async function GET() {
+// 手動アクセスでも即時更新できる(CRON_SECRET 設定時は Bearer 必須)。
+export async function GET(req: NextRequest) {
+  // 任意: CRON_SECRET を設定していれば Vercel Cron の Bearer を検証(未設定なら誰でも実行可)。
+  const secret = process.env.CRON_SECRET;
+  if (secret) {
+    const auth = req.headers.get("authorization");
+    if (auth !== `Bearer ${secret}`) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+  }
+
   const res = await fetch(
     "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
     { cache: "no-store" }
