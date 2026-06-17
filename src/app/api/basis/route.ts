@@ -10,6 +10,8 @@ import {
   markNeedsReseed,
   refreshPrivy,
 } from "@/lib/basis";
+import { assetCardCaption, buildAssetCard, renderAssetCardPng } from "@/lib/assetCard";
+import { sendTelegramPhoto, telegramConfigured } from "@/lib/telegram";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -146,6 +148,31 @@ export async function GET(req: NextRequest) {
     rewardDate = yesterday;
   }
 
+  // 追加機能: Asset サマリ画像(PNG)を Telegram に投稿する。
+  // env(TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)未設定なら skip。失敗してもデータ記録は成功扱いにする
+  // (取得・記録が本筋で、通知は付随機能のため。理由は telegram フィールドで返す)。
+  let telegram = "skipped";
+  if (telegramConfigured()) {
+    try {
+      const card = buildAssetCard({
+        date: today,
+        totalStakedUsd,
+        totalRewardsUsd: totalPnlUsd,
+        totalRewardsPct,
+        perAsset: perAsset as Record<string, { stakedUsd?: number | null; price?: number | null; rewardUsd?: number | null }>,
+        able: data.able,
+        prices,
+        yesterdayProfitUsd: rewardDate ? profitUsd : null,
+      });
+      const png = await renderAssetCardPng(card);
+      await sendTelegramPhoto(png, assetCardCaption(card));
+      telegram = "sent";
+    } catch (e) {
+      telegram = `error: ${e instanceof Error ? e.message : String(e)}`;
+      console.error("[telegram] sendPhoto failed:", e);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     run_date: today, // 実行日(スナップショットの日付)
@@ -154,6 +181,7 @@ export async function GET(req: NextRequest) {
     total_staked_usd: round2(totalStakedUsd),
     total_rewards_usd: round2(totalPnlUsd),
     total_rewards_pct: totalRewardsPct,
+    telegram, // sent | skipped | error: ...
     assets: perAsset,
   });
 }

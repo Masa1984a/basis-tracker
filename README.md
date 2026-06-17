@@ -84,6 +84,34 @@ DRRの推移と相場(BTC価格)との連動性を観察するための個人用
   `/sessions` は 200)。なので日次間隔でも問題なし。唯一の制約は refresh_token の30日寿命なので、
   **最低でも30日に1回は cron が成功している**必要がある(日次なら当然満たす)。
 
+## Asset サマリの Telegram 投稿(daily cron の付随機能)
+
+`/api/basis`(daily cron)が取得・記録したデータから **Asset 要約カード(PNG)** を生成し、
+Telegram に投稿する。basis.pro の実画面をブラウザで撮るのではなく、取得済みデータを
+Next.js 組み込みの `ImageResponse`(`next/og` / Satori)でダーク配色のカードに描画するので、
+**ブラウザ不要・追加依存ゼロ・basis セッションに非干渉**(ログイン由来の `SESSION_CONFLICT` を起こさない)。
+
+カードの内容: Total Staked / 24h Profit(と全体 DRR%)/ 累積 Total Rewards(%)、資産別
+(stBTC・stETH・stSOL・stPAXG)の Staked・DRR・24h Reward、受取可能リワード合計。
+DRR は本アプリ共通の定義(`reward ÷ staked × 100`、想定レンジ 0.5〜0.9%)で算出する。
+
+### セットアップ
+
+1. `@BotFather` で Bot を作成し、トークンを取得。投稿先のグループ/チャンネルにその Bot を追加する。
+2. 投稿先の `chat_id` を取得(グループ/チャンネルは先頭が `-`)。
+3. Vercel の Environment Variables に `TELEGRAM_BOT_TOKEN` と `TELEGRAM_CHAT_ID` を設定して**再デプロイ**。
+   - 両方が揃ったときだけ送信する。欠けていれば送信せず、`/api/basis` のレスポンスは `telegram: "skipped"`。
+   - 送信に失敗してもデータ記録は成功扱い(`telegram: "error: ..."` を返すだけ)。送信成功は `telegram: "sent"`。
+
+### 確認
+
+- 画像の見た目を確認するだけなら、Telegram に投稿せず読み取り専用で
+  `GET /api/basis/card`(**Basic 認証**)を開くと、直近 snapshot から同じカード PNG を返す。
+- 実投稿を試すなら `/api/basis` を手動 GET(`CRON_SECRET` 設定時は
+  `-H "Authorization: Bearer <CRON_SECRET>"` が必要)。
+
+> メモ: トークン/Chat ID を貼り付けた `telegram.txt` 等は `.gitignore` 済み。値は env にのみ置き、コミットしない。
+
 ## TODO / 拡張メモ
 
 - [ ] ファンディングレート列の自動取得(Coinglass APIキー取得後、`src/app/api/market/route.ts` に追記)

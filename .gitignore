@@ -7,6 +7,8 @@ next-env.d.ts
 # env(秘匿)
 .env*.local
 .env
+# Telegram Bot トークン/Chat ID の貼り付けメモ(秘匿。env へ移したら消す)
+telegram.txt
 
 # === basis Path B の機微データ(絶対にコミットしない)===
 # Privy refresh_token / session_id / ネットワークキャプチャ(認証トークン入り)
