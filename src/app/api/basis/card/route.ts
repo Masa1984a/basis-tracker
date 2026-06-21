@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { sql } from "@vercel/postgres";
-import { buildAssetCard, renderAssetCardPng } from "@/lib/assetCard";
+import { buildAssetCard, renderAssetCardPng, type PerAssetInput } from "@/lib/assetCard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 // cron 実行や Telegram 送信は行わない。Basic 認証(middleware)で保護される。
 type RawJson = {
   date?: string;
-  perAsset?: Record<string, { stakedUsd?: number | null; price?: number | null; rewardUsd?: number | null }>;
+  perAsset?: Record<string, PerAssetInput>;
   prices?: Record<string, number | null>;
   able?: Record<string, string | number>;
 };
