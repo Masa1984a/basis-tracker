@@ -11,7 +11,7 @@ import {
   refreshPrivy,
 } from "@/lib/basis";
 import { assetCardCaption, buildAssetCard, renderAssetCardPng, type PerAssetInput } from "@/lib/assetCard";
-import { sendTelegramPhoto, telegramConfigured } from "@/lib/telegram";
+import { formatTarget, sendTelegramPhoto, telegramConfigured } from "@/lib/telegram";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -177,9 +177,9 @@ export async function GET(req: NextRequest) {
     rewardDate = yesterday;
   }
 
-  // 追加機能: Asset サマリ画像(PNG)を Telegram に投稿する。
-  // env(TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)未設定なら skip。失敗してもデータ記録は成功扱いにする
-  // (取得・記録が本筋で、通知は付随機能のため。理由は telegram フィールドで返す)。
+  // 追加機能: Asset サマリ画像(PNG)を Telegram の全ターゲット(env)へ投稿する。
+  // env(TELEGRAM_BOT_TOKEN + 最低1つの投稿先)未設定なら skip。投稿は付随機能なので、
+  // 一部/全部が失敗してもデータ記録は成功扱いにする(結果は telegram フィールドで返す)。
   let telegram = "skipped";
   if (telegramConfigured()) {
     try {
@@ -194,8 +194,15 @@ export async function GET(req: NextRequest) {
         yesterdayProfitUsd: rewardDate ? profitUsd : null,
       });
       const png = await renderAssetCardPng(card);
-      await sendTelegramPhoto(png, assetCardCaption(card));
-      telegram = "sent";
+      const results = await sendTelegramPhoto(png, assetCardCaption(card));
+      const sent = results.filter((r) => r.ok).length;
+      const failed = results.filter((r) => !r.ok);
+      telegram =
+        failed.length === 0
+          ? `sent (${sent}/${results.length})`
+          : `partial (${sent}/${results.length}): ` +
+            failed.map((f) => `${formatTarget(f)}: ${f.error}`).join("; ");
+      for (const f of failed) console.error("[telegram] sendPhoto failed:", formatTarget(f), f.error);
     } catch (e) {
       telegram = `error: ${e instanceof Error ? e.message : String(e)}`;
       console.error("[telegram] sendPhoto failed:", e);
