@@ -11,6 +11,7 @@ import {
   refreshPrivy,
 } from "@/lib/basis";
 import { assetCardCaption, buildAssetCard, renderAssetCardPng, type PerAssetInput } from "@/lib/assetCard";
+import { discordConfigured, formatDiscordTarget, sendDiscordPhoto } from "@/lib/discord";
 import { formatTarget, sendTelegramPhoto, telegramConfigured } from "@/lib/telegram";
 
 export const runtime = "nodejs";
@@ -158,11 +159,14 @@ export async function GET(req: NextRequest) {
     rewardDate = yesterday;
   }
 
-  // 追加機能: Asset サマリ画像(PNG)を Telegram の全ターゲット(env)へ投稿する。
-  // env(TELEGRAM_BOT_TOKEN + 最低1つの投稿先)未設定なら skip。投稿は付随機能なので、
-  // 一部/全部が失敗してもデータ記録は成功扱いにする(結果は telegram フィールドで返す)。
+  // 追加機能: Asset サマリ画像(PNG)を Telegram / Discord の全ターゲット(env)へ投稿する。
+  // env 未設定なら skip。投稿は付随機能なので、一部/全部が失敗してもデータ記録は成功扱いにする
+  // (結果は telegram / discord フィールドで返す)。
   let telegram = "skipped";
-  if (telegramConfigured()) {
+  let discord = "skipped";
+  const sendTelegram = telegramConfigured();
+  const sendDiscord = discordConfigured();
+  if (sendTelegram || sendDiscord) {
     try {
       const card = buildAssetCard({
         date: today,
@@ -175,18 +179,46 @@ export async function GET(req: NextRequest) {
         yesterdayProfitUsd: rewardDate ? profitUsd : null,
       });
       const png = await renderAssetCardPng(card);
-      const results = await sendTelegramPhoto(png, assetCardCaption(card));
-      const sent = results.filter((r) => r.ok).length;
-      const failed = results.filter((r) => !r.ok);
-      telegram =
-        failed.length === 0
-          ? `sent (${sent}/${results.length})`
-          : `partial (${sent}/${results.length}): ` +
-            failed.map((f) => `${formatTarget(f)}: ${f.error}`).join("; ");
-      for (const f of failed) console.error("[telegram] sendPhoto failed:", formatTarget(f), f.error);
+      const caption = assetCardCaption(card);
+
+      if (sendTelegram) {
+        try {
+          const results = await sendTelegramPhoto(png, caption);
+          const sent = results.filter((r) => r.ok).length;
+          const failed = results.filter((r) => !r.ok);
+          telegram =
+            failed.length === 0
+              ? `sent (${sent}/${results.length})`
+              : `partial (${sent}/${results.length}): ` +
+                failed.map((f) => `${formatTarget(f)}: ${f.error}`).join("; ");
+          for (const f of failed) console.error("[telegram] sendPhoto failed:", formatTarget(f), f.error);
+        } catch (e) {
+          telegram = `error: ${e instanceof Error ? e.message : String(e)}`;
+          console.error("[telegram] sendPhoto failed:", e);
+        }
+      }
+
+      if (sendDiscord) {
+        try {
+          const results = await sendDiscordPhoto(png, caption);
+          const sent = results.filter((r) => r.ok).length;
+          const failed = results.filter((r) => !r.ok);
+          discord =
+            failed.length === 0
+              ? `sent (${sent}/${results.length})`
+              : `partial (${sent}/${results.length}): ` +
+                failed.map((f) => `${formatDiscordTarget(f)}: ${f.error}`).join("; ");
+          for (const f of failed) console.error("[discord] webhook failed:", formatDiscordTarget(f), f.error);
+        } catch (e) {
+          discord = `error: ${e instanceof Error ? e.message : String(e)}`;
+          console.error("[discord] webhook failed:", e);
+        }
+      }
     } catch (e) {
-      telegram = `error: ${e instanceof Error ? e.message : String(e)}`;
-      console.error("[telegram] sendPhoto failed:", e);
+      const error = `error: ${e instanceof Error ? e.message : String(e)}`;
+      if (sendTelegram) telegram = error;
+      if (sendDiscord) discord = error;
+      console.error("[notify] asset card build/send failed:", e);
     }
   }
 
@@ -199,6 +231,7 @@ export async function GET(req: NextRequest) {
     total_rewards_usd: round2(totalPnlUsd),
     total_rewards_pct: totalRewardsPct,
     telegram, // sent | skipped | error: ...
+    discord, // sent | skipped | error: ...
     assets: perAsset,
   });
 }

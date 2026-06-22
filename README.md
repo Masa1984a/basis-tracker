@@ -84,10 +84,10 @@ DRRの推移と相場(BTC価格)との連動性を観察するための個人用
   `/sessions` は 200)。なので日次間隔でも問題なし。唯一の制約は refresh_token の30日寿命なので、
   **最低でも30日に1回は cron が成功している**必要がある(日次なら当然満たす)。
 
-## Asset サマリの Telegram 投稿(daily cron の付随機能)
+## Asset サマリの Telegram / Discord 投稿(daily cron の付随機能)
 
 `/api/basis`(daily cron)が取得・記録したデータから **Asset 要約カード(PNG)** を生成し、
-Telegram に投稿する。basis.pro の実画面をブラウザで撮るのではなく、取得済みデータを
+Telegram や Discord チャンネルに投稿する。basis.pro の実画面をブラウザで撮るのではなく、取得済みデータを
 Next.js 組み込みの `ImageResponse`(`next/og` / Satori)でダーク配色のカードに描画するので、
 **ブラウザ不要・追加依存ゼロ・basis セッションに非干渉**(ログイン由来の `SESSION_CONFLICT` を起こさない)。
 
@@ -95,7 +95,7 @@ Next.js 組み込みの `ImageResponse`(`next/og` / Satori)でダーク配色の
 (stBTC・stETH・stSOL・stPAXG)の Staked・DRR・24h Reward、受取可能リワード合計。
 DRR は本アプリ共通の定義(`reward ÷ staked × 100`、想定レンジ 0.5〜0.9%)で算出する。
 
-### セットアップ
+### Telegram セットアップ
 
 1. `@BotFather` で Bot を作成し、トークンを取得。投稿先の各グループ/チャンネルにその Bot を追加する。
 2. 各投稿先の `chat_id` を取得(グループ/チャンネルは先頭が `-`)。
@@ -124,14 +124,32 @@ TELEGRAM_TARGETS=-1009876543210:42,-1005555555555
 
 > Bot は投稿先ごとにそのグループ/チャンネルへ追加が必要(未追加だとその投稿先だけ失敗し、`telegram: "partial (...)"` で理由が返る)。同一 chat+thread の重複指定は自動で除去される。
 
+### Discord セットアップ
+
+Discord は Bot 実装ではなく、対象チャンネルの **Incoming Webhook** に投稿する。
+
+1. Discord の対象チャンネルで Webhook を作成し、Webhook URL をコピーする。
+2. Vercel の Environment Variables に `DISCORD_WEBHOOK_URL` を設定して**再デプロイ**。
+   - `DISCORD_WEBHOOK_URL` があるときだけ送信する。未設定なら `/api/basis` のレスポンスは `discord: "skipped"`。
+   - 送信に失敗してもデータ記録は成功扱い(`discord: "error: ..."` を返すだけ)。全件成功は `discord: "sent (n/n)"`、一部失敗は `discord: "partial (k/n): ..."`。
+   - 複数チャンネルへ送る場合は `DISCORD_WEBHOOK_URLS` に追加 Webhook URL をカンマ/セミコロン/改行区切りで列挙できる。
+
+PowerShell で Webhook の疎通だけ先に確認する例:
+
+```powershell
+$env:DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/..."
+$body = @{ content = "basis-tracker webhook test $(Get-Date -Format s)"; allowed_mentions = @{ parse = @() } } | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method Post -Uri $env:DISCORD_WEBHOOK_URL -ContentType "application/json" -Body $body
+```
+
 ### 確認
 
-- 画像の見た目を確認するだけなら、Telegram に投稿せず読み取り専用で
+- 画像の見た目を確認するだけなら、Telegram / Discord に投稿せず読み取り専用で
   `GET /api/basis/card`(**Basic 認証**)を開くと、直近 snapshot から同じカード PNG を返す。
 - 実投稿を試すなら `/api/basis` を手動 GET(`CRON_SECRET` 設定時は
   `-H "Authorization: Bearer <CRON_SECRET>"` が必要)。
 
-> メモ: トークン/Chat ID を貼り付けた `telegram.txt` 等は `.gitignore` 済み。値は env にのみ置き、コミットしない。
+> メモ: トークン/Chat ID / Webhook URL を貼り付けた `telegram.txt` 等は `.gitignore` 済み。値は env にのみ置き、コミットしない。
 
 ## TODO / 拡張メモ
 
