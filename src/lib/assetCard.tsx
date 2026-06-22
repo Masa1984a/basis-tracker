@@ -3,11 +3,11 @@ import { ImageResponse } from "next/og";
 // basis.pro の Asset 画面に相当する「資産サマリ・カード(PNG)」を、cron が取得済みのデータから生成する。
 // ブラウザ不要(Next.js 組み込みの ImageResponse / Satori でJSX→PNG)。ダッシュボードと同じダーク配色。
 //
-// 各資産について 2 系統の指標を併記する:
-//   - coin 建て(= 純ステーキング利回り): rewardCrypto / staked。価格が約分されるため価格非依存。
-//     basis.pro が実際に付与した「増えた通貨量」とその利回り。
-//   - USD 建て(= 価格変動込み総合リターン): ポジションUSD価値(equity = staked_usd + pnl_usd)の
-//     前日差分とその%。リワードに加え原資産の価格変動を含むため coin 建て利回りとは別物(負もあり得る)。
+// 各資産について「その日のステーク利益(リワード)」だけを 2 通りの単位で併記する:
+//   - coin 建て: rewardCrypto。basis.pro が実際に付与した「増えた通貨量」。
+//   - USD 建て: rewardUsd。その増えた通貨量を当日価格で換算したステーク利益のUSD価値。
+//   どちらも純粋なステーキング利益であり、原資産の価格変動(ポジションの含み損益)は含めない。
+//   DRR(= reward / staked)は価格が約分されるため coin/USD で同値。
 // ※ Satori の既定フォントは Latin のみのため、画像内テキストは ASCII に限定する(日本語は豆腐になる)。
 
 const ASSET_ORDER = ["stBTC", "stETH", "stSOL", "stPAXG"] as const;
@@ -35,11 +35,9 @@ export type AssetCardRow = {
   asset: string;
   baseTicker: string; // BTC / ETH / SOL / PAXG
   stakedUsd: number | null;
-  drrPct: number | null; // coin 建て=USD建てで同値の純ステーキング利回り%
-  rewardUsd: number | null; // リワードの当日価格でのUSD換算(キャプション/後方互換)
+  drrPct: number | null; // 純ステーキング利回り%(reward / staked。coin=USD で同値)
+  rewardUsd: number | null; // その日のステーク利益(増えた通貨量×当日価格)のUSD換算
   tokenReward: number | null; // rewardCrypto(増えた通貨量。claim 等で負もあり得る)
-  usdReturnUsd: number | null; // 価格変動込み総合リターン(USD)
-  usdReturnPct: number | null; // 価格変動込み総合リターン%
 };
 
 export type AssetCardData = {
@@ -57,12 +55,10 @@ export type AssetCardData = {
 export type PerAssetInput = {
   stakedUsd?: number | null;
   price?: number | null;
-  rewardUsd?: number | null;
-  staked?: number | null; // ステーク中の通貨量(coin 建てDRRの分母)
+  rewardUsd?: number | null; // その日のステーク利益のUSD換算
+  staked?: number | null; // ステーク中の通貨量(DRRの分母)
   rewardCrypto?: number | null; // 前日比 Δtotal_pnl(増えた通貨量)
   baseTicker?: string | null; // BTC / ETH / SOL / PAXG
-  usdReturnUsd?: number | null; // 価格変動込み総合リターン(USD)
-  usdReturnPct?: number | null; // 価格変動込み総合リターン%
 };
 
 export function buildAssetCard(input: {
@@ -95,8 +91,6 @@ export function buildAssetCard(input: {
       drrPct,
       rewardUsd,
       tokenReward,
-      usdReturnUsd: p.usdReturnUsd ?? null,
-      usdReturnPct: p.usdReturnPct ?? null,
     });
 
     const price = input.prices?.[st];
@@ -134,18 +128,10 @@ function fmtPct(n: number | null | undefined, d = 3): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return n.toFixed(d) + "%";
 }
-// 符号付き USD(総合リターンは負もあり得る)。ASCII のみ(Satori フォント都合)。
-function fmtSignedUsd(n: number | null | undefined, frac = 0): string {
+// ステーク利益のUSD換算(リワードは 0 以上。プラスは "+" を付ける)。ASCII のみ(Satori フォント都合)。
+function fmtRewardUsd(n: number | null | undefined, frac = 2): string {
   if (n == null || !Number.isFinite(n)) return "—";
-  const body = Math.abs(n).toLocaleString("en-US", {
-    minimumFractionDigits: frac,
-    maximumFractionDigits: frac,
-  });
-  return (n < 0 ? "-$" : "+$") + body;
-}
-function fmtSignedPct(n: number | null | undefined, d = 2): string {
-  if (n == null || !Number.isFinite(n)) return "—";
-  return (n < 0 ? "-" : "+") + Math.abs(n).toFixed(d) + "%";
+  return (n > 0 ? "+" : "") + fmtUsd(n, frac);
 }
 // 通貨量(増えた token)。桁数は大きさに応じて可変。符号付き。
 function fmtToken(n: number | null | undefined): string {
@@ -168,13 +154,13 @@ export function assetCardCaption(c: AssetCardData): string {
   }
   lines.push(`Total rewards: ${fmtUsd(c.totalRewardsUsd)} (${fmtPct(c.totalRewardsPct, 2)})`);
   if (c.claimableUsd != null) lines.push(`Claimable: ${fmtUsd(c.claimableUsd, 2)}`);
-  // 資産別: coin 建てリワード(増えた通貨量)と USD 建て総合リターン(価格変動込み)。
+  // 資産別: その日のステーク利益を coin(増えた通貨量)と USD 換算で併記。
   const per = c.rows
-    .filter((r) => r.tokenReward != null || r.usdReturnUsd != null)
+    .filter((r) => r.tokenReward != null || r.rewardUsd != null)
     .map(
       (r) =>
-        `${r.asset}: ${fmtToken(r.tokenReward)} ${r.baseTicker} (DRR ${fmtPct(r.drrPct)})` +
-        ` · USD ${fmtSignedUsd(r.usdReturnUsd)} (${fmtSignedPct(r.usdReturnPct)})`
+        `${r.asset}: ${fmtToken(r.tokenReward)} ${r.baseTicker} = ${fmtRewardUsd(r.rewardUsd)}` +
+        ` (DRR ${fmtPct(r.drrPct)})`
     );
   if (per.length) lines.push("", ...per);
   return lines.join("\n");
@@ -279,9 +265,9 @@ function cardElement(c: AssetCardData) {
           padding: 22,
         }}
       >
-        {/* 凡例: coin = 価格非依存の純利回り / USD = 価格変動込み総合リターン */}
+        {/* 凡例: Reward = その日のステーク利益のみ(価格変動は含めない)。coin と USD で併記 */}
         <div style={{ display: "flex", color: C.dim, fontSize: 14, marginBottom: 10 }}>
-          coin = staking yield (price-independent) · USD = total return incl. price
+          Reward = daily staking profit only, not price change · DRR = reward / staked
         </div>
         <div
           style={{
@@ -296,9 +282,8 @@ function cardElement(c: AssetCardData) {
           <div style={{ display: "flex", width: 200 }}>Asset</div>
           <div style={{ display: "flex", flexGrow: 1, justifyContent: "flex-end" }}>Staked</div>
           {headerCell("Reward", "coin", 230)}
-          {headerCell("DRR", "coin", 130)}
-          {headerCell("P/L", "USD total", 250)}
-          {headerCell("DRR", "USD total", 150)}
+          {headerCell("Reward", "USD", 240)}
+          {headerCell("DRR", "%", 150)}
         </div>
         {c.rows.map((r, i) => (
           <div
@@ -331,28 +316,18 @@ function cardElement(c: AssetCardData) {
             >
               {r.tokenReward != null ? `${fmtToken(r.tokenReward)} ${r.baseTicker}` : "—"}
             </div>
-            <div style={{ display: "flex", width: 130, justifyContent: "flex-end", color: C.amber }}>
+            <div
+              style={{
+                display: "flex",
+                width: 240,
+                justifyContent: "flex-end",
+                color: r.rewardUsd != null && r.rewardUsd > 0 ? C.green : C.dim,
+              }}
+            >
+              {fmtRewardUsd(r.rewardUsd)}
+            </div>
+            <div style={{ display: "flex", width: 150, justifyContent: "flex-end", color: C.amber }}>
               {fmtPct(r.drrPct)}
-            </div>
-            <div
-              style={{
-                display: "flex",
-                width: 250,
-                justifyContent: "flex-end",
-                color: signColor(r.usdReturnUsd),
-              }}
-            >
-              {fmtSignedUsd(r.usdReturnUsd)}
-            </div>
-            <div
-              style={{
-                display: "flex",
-                width: 150,
-                justifyContent: "flex-end",
-                color: signColor(r.usdReturnPct),
-              }}
-            >
-              {fmtSignedPct(r.usdReturnPct)}
             </div>
           </div>
         ))}

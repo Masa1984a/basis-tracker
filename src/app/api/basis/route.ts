@@ -87,11 +87,8 @@ export async function GET(req: NextRequest) {
 
     // 前日ぶんの実測リワード = 累積 total_pnl の差分(date < today の最新スナップショットとの差)。
     // 前日データが無い資産(初回/新規)は「未測定」とし、名目では埋めない(推定値を実測日に混ぜない)。
-    // staked_usd / pnl_usd も併せて取り、価格変動込みの USD 総合リターン(equity 差分)を算出する。
-    const prev = await sql<{ total_pnl: number; staked_usd: number | null; pnl_usd: number | null }>`
-      select total_pnl::float8 as total_pnl,
-             staked_usd::float8 as staked_usd,
-             pnl_usd::float8 as pnl_usd
+    const prev = await sql<{ total_pnl: number }>`
+      select total_pnl::float8 as total_pnl
       from basis_staking_daily
       where asset = ${a.st} and date < ${today}
       order by date desc limit 1`;
@@ -106,20 +103,6 @@ export async function GET(req: NextRequest) {
     if (stakedUsd != null) totalStakedUsd += stakedUsd;
     if (pnlUsd != null) totalPnlUsd += pnlUsd;
 
-    // USD 建て総合リターン(価格変動込み): ポジションUSD価値 equity = staked_usd + pnl_usd の前日差分。
-    // 当日価格で評価した equity と前日記録の equity(前日価格)の差なので、リワード + 価格変動を含む。
-    let usdReturnUsd: number | null = null;
-    let usdReturnPct: number | null = null;
-    const equityNow = stakedUsd != null && pnlUsd != null ? stakedUsd + pnlUsd : null;
-    const prevStakedUsd = prev.rows[0]?.staked_usd;
-    const prevPnlUsd = prev.rows[0]?.pnl_usd;
-    const equityPrev =
-      prevStakedUsd != null && prevPnlUsd != null ? Number(prevStakedUsd) + Number(prevPnlUsd) : null;
-    if (equityNow != null && equityPrev != null) {
-      usdReturnUsd = equityNow - equityPrev;
-      if (equityPrev > 0) usdReturnPct = (usdReturnUsd / equityPrev) * 100;
-    }
-
     perAsset[a.st] = {
       staked,
       totalPnl,
@@ -129,8 +112,6 @@ export async function GET(req: NextRequest) {
       rewardCrypto,
       rewardUsd,
       baseTicker: a.base,
-      usdReturnUsd,
-      usdReturnPct,
     };
 
     await sql`
