@@ -97,32 +97,20 @@ DRR は本アプリ共通の定義(`reward ÷ staked × 100`、想定レンジ 0
 
 ### Telegram セットアップ
 
-1. `@BotFather` で Bot を作成し、トークンを取得。投稿先の各グループ/チャンネルにその Bot を追加する。
-2. 各投稿先の `chat_id` を取得(グループ/チャンネルは先頭が `-`)。
+1. `@BotFather` で Bot を作成し、トークンを取得。投稿先の各チャット/グループにその Bot を追加する。
+2. 各投稿先の `chat_id` を取得する(グループ/チャンネルは先頭が `-`)。
 3. Vercel の Environment Variables に `TELEGRAM_BOT_TOKEN` と `TELEGRAM_CHAT_ID` を設定して**再デプロイ**。
    - `TELEGRAM_BOT_TOKEN` と最低1つの投稿先が揃ったときだけ送信する。投稿先が無ければ送信せず、`/api/basis` のレスポンスは `telegram: "skipped"`。
    - 送信に失敗してもデータ記録は成功扱い(`telegram: "error: ..."` を返すだけ)。全件成功は `telegram: "sent (n/n)"`、一部失敗は `telegram: "partial (k/n): ..."`。
 
 #### 複数の投稿先へ同時投稿
 
-同じカードを複数のグループ/チャンネル(やフォーラムのトピック)へ同時投稿できる。投稿先 = `chat_id` + 任意の `message_thread_id`(トピック)。
+同じカードを複数のチャット/チャンネル(やフォーラムのトピック)へ同時投稿できる。投稿先 = `chat_id` + 任意の `message_thread_id`(トピック)。
 
 - **`TELEGRAM_CHAT_ID`**(+ 任意の **`TELEGRAM_THREAD_ID`**): 主投稿先。`THREAD_ID` は主投稿先がフォーラム型グループのときに特定トピックへ送る場合のみ指定(未指定なら General)。
 - **`TELEGRAM_TARGETS`**: 追加の投稿先をカンマ/セミコロン/改行区切りで列挙。各要素は `chatId` または `chatId:threadId`。
 
-例) 既存グループに加えて別グループ `-1009876543210` にも投稿(`TELEGRAM_CHAT_ID` は既存のまま):
-
-```
-TELEGRAM_TARGETS=-1009876543210
-```
-
-例) 別グループの特定トピック `#42` と、さらに別グループにも投稿:
-
-```
-TELEGRAM_TARGETS=-1009876543210:42,-1005555555555
-```
-
-> Bot は投稿先ごとにそのグループ/チャンネルへ追加が必要(未追加だとその投稿先だけ失敗し、`telegram: "partial (...)"` で理由が返る)。同一 chat+thread の重複指定は自動で除去される。
+> Telegram group への通知を廃止する場合は、`TELEGRAM_CHAT_ID` / `TELEGRAM_TARGETS` のうち **group の chat_id に該当する値だけ**を Vercel の Environment Variables から外す。`TELEGRAM_TARGETS` の仕組み自体は残す。
 
 ### Discord セットアップ
 

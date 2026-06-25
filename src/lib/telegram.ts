@@ -8,11 +8,14 @@
 //   TELEGRAM_TARGETS    … 任意。追加の投稿先をカンマ/セミコロン/改行区切りで列挙。
 //                         各要素は "chatId" もしくは "chatId:threadId"。
 //
-// 例) 既存グループ + 別グループに同時投稿:
+// 例) 既存チャット + 別チャットに同時投稿:
 //   TELEGRAM_CHAT_ID=-1001111111111
 //   TELEGRAM_TARGETS=-1002222222222
 //
 // BOT_TOKEN と「最低1つのターゲット」が揃わなければ telegramConfigured() は false で送信スキップ。
+//
+// NOTE: telegram group への通知を止めたい場合は、TELEGRAM_CHAT_ID / TELEGRAM_TARGETS のうち
+// group の chat_id に該当する値だけを env から外す。TELEGRAM_TARGETS の仕組み自体は残す。
 
 const API = "https://api.telegram.org";
 
@@ -37,10 +40,10 @@ export function telegramTargets(): TelegramTarget[] {
     targets.push(threadId != null ? { chatId: id, threadId } : { chatId: id });
   };
 
-  // 主投稿先(後方互換): TELEGRAM_CHAT_ID (+ 任意の TELEGRAM_THREAD_ID)
+  // 主投稿先: TELEGRAM_CHAT_ID (+ 任意の TELEGRAM_THREAD_ID)
   add(process.env.TELEGRAM_CHAT_ID, parseThread(process.env.TELEGRAM_THREAD_ID));
 
-  // 追加投稿先: TELEGRAM_TARGETS = "chatId[:threadId]" をカンマ/セミコロン/改行区切りで
+  // 追加投稿先: TELEGRAM_TARGETS = "chatId[:threadId]" をカンマ/セミコロン/改行区切りで列挙。
   for (const entry of (process.env.TELEGRAM_TARGETS ?? "").split(/[,;\n]/)) {
     const s = entry.trim();
     if (!s) continue;
