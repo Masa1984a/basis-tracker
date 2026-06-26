@@ -174,8 +174,6 @@ export async function GET(req: NextRequest) {
         totalRewardsUsd: totalPnlUsd,
         totalRewardsPct,
         perAsset: perAsset as Record<string, PerAssetInput>,
-        able: data.able,
-        prices,
         yesterdayProfitUsd: rewardDate ? profitUsd : null,
       });
       const png = await renderAssetCardPng(card);

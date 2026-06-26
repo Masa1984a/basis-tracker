@@ -47,7 +47,6 @@ export type AssetCardData = {
   totalRewardsPct: number | null; // 累積 PnL ÷ staked × 100
   yesterdayProfitUsd: number | null; // 前日ぶんの実測リワード(USD)
   yesterdayDrrPct: number | null; // 前日ぶんの全体DRR%
-  claimableUsd: number | null; // 受取可能リワード合計(USD)
   rows: AssetCardRow[];
 };
 
@@ -67,13 +66,9 @@ export function buildAssetCard(input: {
   totalRewardsUsd: number;
   totalRewardsPct: number | null;
   perAsset: Record<string, PerAssetInput>;
-  able: Record<string, string | number>;
-  prices: Record<string, number | null>;
   yesterdayProfitUsd: number | null;
 }): AssetCardData {
   const rows: AssetCardRow[] = [];
-  let claimableUsd = 0;
-  let hasClaimable = false;
 
   for (const st of ASSET_ORDER) {
     const p = input.perAsset[st];
@@ -92,13 +87,6 @@ export function buildAssetCard(input: {
       rewardUsd,
       tokenReward,
     });
-
-    const price = input.prices?.[st];
-    const able = Number(input.able?.[st]);
-    if (Number.isFinite(able) && able > 0 && price != null) {
-      claimableUsd += able * price;
-      hasClaimable = true;
-    }
   }
 
   const yesterdayDrrPct =
@@ -113,7 +101,6 @@ export function buildAssetCard(input: {
     totalRewardsPct: input.totalRewardsPct,
     yesterdayProfitUsd: input.yesterdayProfitUsd,
     yesterdayDrrPct,
-    claimableUsd: hasClaimable ? claimableUsd : null,
     rows,
   };
 }
@@ -153,7 +140,6 @@ export function assetCardCaption(c: AssetCardData): string {
     lines.push(`24h reward: +${fmtUsd(c.yesterdayProfitUsd, 2)} (DRR ${fmtPct(c.yesterdayDrrPct)})`);
   }
   lines.push(`Total rewards: ${fmtUsd(c.totalRewardsUsd)} (${fmtPct(c.totalRewardsPct, 2)})`);
-  if (c.claimableUsd != null) lines.push(`Claimable: ${fmtUsd(c.claimableUsd, 2)}`);
   // 資産別: その日のステーク利益を coin(増えた通貨量)と USD 換算で併記。
   const per = c.rows
     .filter((r) => r.tokenReward != null || r.rewardUsd != null)
@@ -345,14 +331,11 @@ function cardElement(c: AssetCardData) {
         style={{
           display: "flex",
           flexDirection: "row",
-          justifyContent: "space-between",
+          justifyContent: "flex-end",
           color: C.dim,
           fontSize: 16,
         }}
       >
-        <div style={{ display: "flex" }}>
-          {c.claimableUsd != null ? "Claimable: " + fmtUsd(c.claimableUsd, 2) : " "}
-        </div>
         <div style={{ display: "flex" }}>basis-tracker · api</div>
       </div>
     </div>

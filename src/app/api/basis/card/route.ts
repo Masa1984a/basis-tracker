@@ -46,8 +46,6 @@ export async function GET() {
     totalRewardsUsd: row.total_rewards_usd ?? 0,
     totalRewardsPct: row.total_rewards_pct ?? null,
     perAsset: raw.perAsset ?? {},
-    able: raw.able ?? {},
-    prices: raw.prices ?? {},
     yesterdayProfitUsd: rew.rows[0]?.profit_usd ?? null,
   });
 
