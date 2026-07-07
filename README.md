@@ -84,6 +84,30 @@ DRRの推移と相場(BTC価格)との連動性を観察するための個人用
   `/sessions` は 200)。なので日次間隔でも問題なし。唯一の制約は refresh_token の30日寿命なので、
   **最低でも30日に1回は cron が成功している**必要がある(日次なら当然満たす)。
 
+### 手動テスト(dry-run / 記録・投稿なし)
+
+`/api/basis` を素の GET で手動実行すると **その日のデータを実際に書き込む**ため、翌日の集計に影響する:
+
+- `basis_staking_daily` の当日行(累積 `total_pnl`)を実行時点の値で上書き → **翌 cron のリワード基準がズレる**
+  (日次リワード = 翌日PnL − 当日行 の差分なので、intraday の値で上書きすると過少計上になる)
+- `daily_rewards` の前日ぶんを上書き / `snapshots` に余分な行を追加 / Telegram・Discord にカードを重複投稿
+
+これを避けて「取得〜集計〜カード内容」だけ確認したいときは **`?dry=1`** を付ける。取得と集計は本番と
+同一に行い JSON を返すが、上記の書き込み・投稿は**一切しない**(レスポンスに `dry_run: true`、通知欄は
+`skipped (dry-run)`)。返る数値は「本番実行したら記録される値」のプレビュー。
+
+```bash
+# 事前チェック: 記録も投稿もしない(値のプレビューのみ)
+curl -H "Authorization: Bearer <CRON_SECRET>" "https://<your-app>.vercel.app/api/basis?dry=1"
+
+# データは書かずに通知経路だけ試す(Telegram / Discord の疎通確認)
+curl -H "Authorization: Bearer <CRON_SECRET>" "https://<your-app>.vercel.app/api/basis?dry=1&notify=1"
+```
+
+唯一の副作用は Privy トークンの refresh + ローテ保存(取得に必須。cron の通常動作と同じで、リワードや
+スナップショット等の**記録結果には無影響**)。このため `?dry=1` は「翌日の cron が通るか」の事前確認も
+兼ねる。`CRON_SECRET` 未設定なら Bearer ヘッダは不要。
+
 ## Asset サマリの Telegram / Discord 投稿(daily cron の付随機能)
 
 `/api/basis`(daily cron)が取得・記録したデータから **Asset 要約カード(PNG)** を生成し、
@@ -135,7 +159,9 @@ Invoke-RestMethod -Method Post -Uri $env:DISCORD_WEBHOOK_URL -ContentType "appli
 - 画像の見た目を確認するだけなら、Telegram / Discord に投稿せず読み取り専用で
   `GET /api/basis/card`(**Basic 認証**)を開くと、直近 snapshot から同じカード PNG を返す。
 - 実投稿を試すなら `/api/basis` を手動 GET(`CRON_SECRET` 設定時は
-  `-H "Authorization: Bearer <CRON_SECRET>"` が必要)。
+  `-H "Authorization: Bearer <CRON_SECRET>"` が必要)。ただし素の手動 GET は**当日データを書き込み +
+  カードを重複投稿**するので、影響を避けたいテストは `?dry=1`(記録・投稿なし)を使う
+  → 「手動テスト(dry-run)」参照。
 
 > メモ: トークン/Chat ID / Webhook URL を貼り付けた `telegram.txt` 等は `.gitignore` 済み。値は env にのみ置き、コミットしない。
 
