@@ -30,6 +30,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // 手動テスト用の dry-run。読み取り経路(Privy 更新 + basis 取得 + 集計)は本番と同一に
+  // 実行するが、basis_staking_daily / snapshots / daily_rewards への書き込みと通知投稿を
+  // 一切しない。フラグ無し(?dry なし)は従来どおりの本番動作。?dry=1 で dry-run。
+  // dry-run 中でも通知経路だけ試したいときは ?dry=1&notify=1(データは書かない)。
+  // 注: セッション更新(refresh_token のローテ保存)だけは読み取りに必須なので dry-run でも行う。
+  //     これはリワード/スナップショット等の記録結果には影響しない(cron の通常動作と同じ)。
+  const params = req.nextUrl.searchParams;
+  const truthy = (v: string | null) => v != null && ["1", "true", "yes", "on"].includes(v.toLowerCase());
+  const dryRun = truthy(params.get("dry")) || truthy(params.get("dryRun"));
+  const doNotify = dryRun ? truthy(params.get("notify")) : true;
+
   const session = await loadSession();
   if (!session) {
     return NextResponse.json(
@@ -115,7 +126,7 @@ export async function GET(req: NextRequest) {
       baseTicker: a.base,
     };
 
-    await sql`
+    if (!dryRun) await sql`
       insert into basis_staking_daily
         (date, asset, total_staked, locked_amount, total_pnl, realized_pnl, unrealized_pnl,
          able_reward, balance, daily_roi, price_usd, staked_usd, pnl_usd, reward_crypto, reward_usd, raw)
@@ -137,7 +148,7 @@ export async function GET(req: NextRequest) {
   const totalRewardsPct = totalStakedUsd > 0 ? (totalPnlUsd / totalStakedUsd) * 100 : null;
 
   // スナップショット(USD建て)を記録 → 既存ダッシュボードがそのまま使える
-  await sql`
+  if (!dryRun) await sql`
     insert into snapshots
       (total_staked_usd, total_rewards_usd, total_rewards_pct, staking_wallet_usd, raw_json)
     values
@@ -151,7 +162,7 @@ export async function GET(req: NextRequest) {
   const profitUsd = round3(dailyRewardUsd) ?? 0;
   let rewardDate: string | null = null;
   if (measuredAssets > 0) {
-    await sql`
+    if (!dryRun) await sql`
       insert into daily_rewards (date, profit_usd, source)
       values (${yesterday}, ${profitUsd}, ${"api"})
       on conflict (date) do update set
@@ -162,11 +173,12 @@ export async function GET(req: NextRequest) {
   // 追加機能: Asset サマリ画像(PNG)を Telegram / Discord の全ターゲット(env)へ投稿する。
   // env 未設定なら skip。投稿は付随機能なので、一部/全部が失敗してもデータ記録は成功扱いにする
   // (結果は telegram / discord フィールドで返す)。
-  let telegram = "skipped";
-  let discord = "skipped";
   const sendTelegram = telegramConfigured();
   const sendDiscord = discordConfigured();
-  if (sendTelegram || sendDiscord) {
+  const suppressNotify = dryRun && !doNotify; // dry-run 既定は投稿しない(?notify=1 で解除)
+  let telegram = suppressNotify && sendTelegram ? "skipped (dry-run)" : "skipped";
+  let discord = suppressNotify && sendDiscord ? "skipped (dry-run)" : "skipped";
+  if (!suppressNotify && (sendTelegram || sendDiscord)) {
     try {
       const card = buildAssetCard({
         date: today,
@@ -222,6 +234,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    dry_run: dryRun, // true のとき DB 書き込み・通知(既定)を行っていない
     run_date: today, // 実行日(スナップショットの日付)
     reward_date: rewardDate, // リワードを帰属させた日=前日。初回など未測定時は null
     profit_usd: rewardDate ? profitUsd : null,
