@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// 認証なしで公開するパス(/drr, /api/drr)
+const PUBLIC_PREFIXES = ["/drr", "/api/drr"];
+
 export function middleware(req: NextRequest) {
+  const { pathname } = req.nextUrl;
+
+  // 公開パスは認証をスキップ
+  if (PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+    return NextResponse.next();
+  }
+
   const user = process.env.BASIC_AUTH_USER;
   const pass = process.env.BASIC_AUTH_PASS;
   if (!user || !pass) return NextResponse.next(); // ローカル開発用
@@ -27,6 +37,6 @@ export function middleware(req: NextRequest) {
 // 認証情報なしで取得するため、ここを保護すると 401 でインストールが壊れる。非機密なので公開で可。
 export const config = {
   matcher: [
-    "/((?!api/market|api/basis(?!/)|api/drr|drr|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|offline.html|icons/).*)",
+    "/((?!api/market|api/basis(?!/)|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|offline.html|icons/).*)",
   ],
 };
