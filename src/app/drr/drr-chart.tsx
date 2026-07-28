@@ -71,9 +71,12 @@ export default function DrrChart() {
   return (
     <>
       <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>Daily Reward Rate by Asset</h1>
-      <p style={{ fontSize: 13, color: "var(--dim, #888)", marginBottom: 24 }}>
+      <p style={{ fontSize: 13, color: "var(--dim, #888)", margin: "0 0 4px" }}>
         basis.pro staking · DRR = daily reward ÷ amount staked × 100
         {dateRange && ` · ${dateRange}`}
+      </p>
+      <p style={{ fontSize: 13, color: "var(--dim, #888)", margin: "0 0 24px" }}>
+        Rates include the 180-day lock bonus (+100%) — the base DRR is roughly half these figures.
       </p>
 
       {loading ? (
