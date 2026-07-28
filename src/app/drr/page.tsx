@@ -10,7 +10,6 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  ReferenceLine,
 } from "recharts";
 
 type DrrRow = { date: string; BTC?: number; ETH?: number; PAXG?: number; SOL?: number };
@@ -29,6 +28,20 @@ function fmtDate(dateStr: string) {
 
 function fmtPct(v: number) {
   return v.toFixed(2) + "%";
+}
+
+// Line の label にオブジェクトを渡すと全データ点にラベルが付くため、
+// 最終データ点にだけ「BTC 0.38%」形式で描くカスタムラベルを使う。
+function makeEndLabel(key: string, color: string, lastIndex: number) {
+  return function EndLabel(props: { x?: number; y?: number; index?: number; value?: number }) {
+    const { x, y, index, value } = props;
+    if (index !== lastIndex || value == null || x == null || y == null) return null;
+    return (
+      <text x={x + 8} y={y} fill={color} fontSize={11} dominantBaseline="middle">
+        {`${key} ${fmtPct(value)}`}
+      </text>
+    );
+  };
 }
 
 export default function DrrPage() {
@@ -88,12 +101,6 @@ export default function DrrPage() {
                 contentStyle={{ fontSize: 12 }}
               />
               <Legend verticalAlign="bottom" height={36} iconType="circle" iconSize={8} />
-              <ReferenceLine
-                y={0.5}
-                stroke="rgba(128,128,128,0.4)"
-                strokeDasharray="4 4"
-                label={{ value: "想定レンジ 0.5–0.9%", position: "insideTopLeft", fontSize: 11, fill: "#888" }}
-              />
               {ASSETS.map(({ key, color }) => (
                 <Line
                   key={key}
@@ -103,18 +110,9 @@ export default function DrrPage() {
                   strokeWidth={2}
                   dot={{ r: 3, fill: color }}
                   activeDot={{ r: 5 }}
+                  isAnimationActive={false}
                   connectNulls
-                  label={
-                    latest?.[key] != null
-                      ? {
-                          value: `${key}  ${fmtPct(latest[key]!)}`,
-                          position: "right",
-                          fontSize: 11,
-                          fill: color,
-                          dx: 4,
-                        }
-                      : undefined
-                  }
+                  label={makeEndLabel(key, color, data.length - 1)}
                 />
               ))}
             </LineChart>

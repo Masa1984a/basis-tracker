@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
-import Link from "next/link";
 import "./globals.css";
 import PwaRegister from "./pwa-register";
+import SiteNav from "./site-nav";
 
 export const metadata: Metadata = {
   title: "BASIS TRACKER",
@@ -26,11 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <PwaRegister />
         <header className="site">
           <span className="brand">BASIS TRACKER</span>
-          <nav>
-            <Link href="/">記録</Link>
-            <Link href="/dashboard">ダッシュボード</Link>
-            <Link href="/drr">DRR推移</Link>
-          </nav>
+          <SiteNav />
         </header>
         <main>{children}</main>
       </body>
