@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import QRCode from "qrcode";
 import DrrChart from "./drr-chart";
 
-// TODO(owner): 実際のリファラルリンクに差し替える。QR はこの値から生成される。
 const REFERRAL_URL = "https://basis.pro/register/RMJC3854";
 
 export const metadata: Metadata = {
@@ -13,9 +12,10 @@ export const metadata: Metadata = {
 export default async function DrrPage() {
   const qrSvg = await QRCode.toString(REFERRAL_URL, {
     type: "svg",
-    // margin は QR 規格の静穏域 4 モジュールを確保する(下回るとスキャン失敗の原因になる)
-    margin: 4,
-    width: 176,
+    // 静穏域は SVG 側に持たせず、白ボックスの padding で確保する(下の padding は
+    // 見た目の余白ではなくスキャンに必要な要素)。小さい表示でもモジュールを太く保つため。
+    margin: 0,
+    width: 88,
     // スキャン成功率のため、暗い背景ページでも QR 自体は白地・濃色モジュールにする。
     color: { dark: "#0b0e11", light: "#ffffff" },
   });
@@ -28,7 +28,7 @@ export default async function DrrPage() {
         <h2>Referral link</h2>
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
           <div
-            style={{ background: "#fff", borderRadius: 8, padding: 8, lineHeight: 0, flexShrink: 0 }}
+            style={{ background: "#fff", borderRadius: 6, padding: 10, lineHeight: 0, flexShrink: 0 }}
             dangerouslySetInnerHTML={{ __html: qrSvg }}
           />
           <div style={{ flex: "1 1 320px", minWidth: 0 }}>
