@@ -13,12 +13,15 @@ export async function GET() {
       END AS drr
     FROM basis_staking_daily
     WHERE reward_crypto IS NOT NULL AND total_staked > 0
+      AND date >= '2026-06-27'
     ORDER BY date, asset`;
 
   const map = new Map<string, Record<string, number | string>>();
   for (const row of rows) {
     if (!map.has(row.date)) map.set(row.date, { date: row.date });
-    if (row.drr != null) map.get(row.date)![row.asset] = Number(row.drr);
+    // DB の asset はステーキングトークン名(stBTC 等)。グラフの dataKey に合わせて st を剥がす。
+    if (row.drr != null)
+      map.get(row.date)![String(row.asset).replace(/^st/, "")] = Number(row.drr);
   }
 
   const data = Array.from(map.values()).sort((a, b) =>
