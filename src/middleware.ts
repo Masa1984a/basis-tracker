@@ -25,9 +25,15 @@ export function middleware(req: NextRequest) {
       return NextResponse.next();
     }
   }
+  // WWW-Authenticate は実際のページ遷移のときだけ付ける。
+  // Link の自動 prefetch(fetch)に付けると、公開ページ閲覧中でも
+  // ブラウザが認証ダイアログを出してしまうため。
+  const isNavigation = req.headers.get("sec-fetch-mode") === "navigate";
   return new NextResponse("Authentication required", {
     status: 401,
-    headers: { "WWW-Authenticate": 'Basic realm="basis-tracker"' },
+    headers: isNavigation
+      ? { "WWW-Authenticate": 'Basic realm="basis-tracker"' }
+      : undefined,
   });
 }
 
