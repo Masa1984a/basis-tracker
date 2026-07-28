@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// 認証なしで公開するパス(/drr, /api/drr)
-const PUBLIC_PREFIXES = ["/drr", "/api/drr"];
-
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // 公開パスは認証をスキップ
-  if (PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+  // 公開ページ・API: 認証不要
+  if (pathname.startsWith("/drr") || pathname.startsWith("/api/drr")) {
+    return NextResponse.next();
+  }
+
+  // cron エンドポイント: /api/market と /api/basis(末尾完全一致のみ、サブパスは保護)
+  if (pathname === "/api/market" || pathname === "/api/basis") {
     return NextResponse.next();
   }
 
@@ -29,14 +31,11 @@ export function middleware(req: NextRequest) {
   });
 }
 
-// cron が叩く /api/market・/api/basis(末尾完全一致)は Basic 認証の対象外。
-// サブパス /api/basis/* は保護対象に残す: 秘匿情報を受け取る /api/basis/seed と、
-// 資産データを返す /api/basis/card(プレビュー)。`api/basis(?!/)` で「/api/basis に
-// スラッシュが続かない場合のみ」を除外する。
-// PWA 静的アセット(manifest/sw/offline/icons)も対象外。SW はインストール時に
-// 認証情報なしで取得するため、ここを保護すると 401 でインストールが壊れる。非機密なので公開で可。
+// matcher は静的アセットと PWA ファイルのみ除外するシンプルな正規表現に絞る。
+// 複雑なネスト先読み(api/basis(?!/))は Edge ランタイムで誤動作する可能性があるため、
+// 認証除外ロジックはすべて関数内の startsWith で処理する。
 export const config = {
   matcher: [
-    "/((?!api/market|api/basis(?!/)|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|offline.html|icons/).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|offline.html|icons/).*)",
   ],
 };
