@@ -29,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <nav>
             <Link href="/">記録</Link>
             <Link href="/dashboard">ダッシュボード</Link>
+            <Link href="/drr">DRR推移</Link>
           </nav>
         </header>
         <main>{children}</main>

@@ -27,6 +27,6 @@ export function middleware(req: NextRequest) {
 // 認証情報なしで取得するため、ここを保護すると 401 でインストールが壊れる。非機密なので公開で可。
 export const config = {
   matcher: [
-    "/((?!api/market|api/basis(?!/)|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|offline.html|icons/).*)",
+    "/((?!api/market|api/basis(?!/)|api/drr|drr|_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|offline.html|icons/).*)",
   ],
 };
