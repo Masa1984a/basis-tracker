@@ -36,6 +36,15 @@ function fmtPct(v: number) {
   return v.toFixed(2) + "%";
 }
 
+// recharts の auto domain は等間隔だが半端な値(0.755 等)の目盛を作る。それを小数1桁で
+// 表示するとラベルと目盛線の実位置がずれるため、0.1% 刻みの丸い値に固定する。
+function tenthTicks(values: number[]) {
+  if (values.length === 0) return [];
+  const lo = Math.floor(Math.min(...values) * 10);
+  const hi = Math.max(Math.ceil(Math.max(...values) * 10), lo + 1);
+  return Array.from({ length: hi - lo + 1 }, (_, i) => (lo + i) / 10);
+}
+
 // Line の label にオブジェクトを渡すと全データ点にラベルが付くため、
 // 最終データ点にだけ「BTC 0.38%」形式で描くカスタムラベルを使う。
 function makeEndLabel(key: string, color: string, lastIndex: number) {
@@ -63,6 +72,9 @@ export default function DrrChart() {
   }, []);
 
   const latest = data[data.length - 1];
+  const yTicks = tenthTicks(
+    data.flatMap((row) => ASSETS.map(({ key }) => row[key]).filter((v) => v != null))
+  );
   const dateRange =
     data.length >= 2
       ? `${fmtDate(data[0].date)} – ${fmtDate(latest.date)}, ${parseDate(latest.date).getUTCFullYear()}`
@@ -101,7 +113,8 @@ export default function DrrChart() {
                 tick={{ fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
-                domain={["auto", "auto"]}
+                domain={[yTicks[0], yTicks[yTicks.length - 1]]}
+                ticks={yTicks}
                 width={42}
               />
               <Tooltip
