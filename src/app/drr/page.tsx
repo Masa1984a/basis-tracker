@@ -35,7 +35,8 @@ function fmtPct(v: number) {
 function makeEndLabel(key: string, color: string, lastIndex: number) {
   return function EndLabel(props: { x?: number; y?: number; index?: number; value?: number }) {
     const { x, y, index, value } = props;
-    if (index !== lastIndex || value == null || x == null || y == null) return null;
+    // recharts の型上 null は返せないので、スキップする点では空要素を返す
+    if (index !== lastIndex || value == null || x == null || y == null) return <g />;
     return (
       <text x={x + 8} y={y} fill={color} fontSize={11} dominantBaseline="middle">
         {`${key} ${fmtPct(value)}`}
