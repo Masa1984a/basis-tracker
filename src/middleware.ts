@@ -4,7 +4,12 @@ export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // 公開ページ・API: 認証不要
-  if (pathname.startsWith("/drr") || pathname.startsWith("/api/drr")) {
+  // /privacy は Even Hub のストア審査が要求する公開プライバシーポリシー。
+  if (
+    pathname.startsWith("/drr") ||
+    pathname.startsWith("/api/drr") ||
+    pathname.startsWith("/privacy")
+  ) {
     return NextResponse.next();
   }
 
