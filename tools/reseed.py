@@ -49,20 +49,35 @@ def http(method, url, headers, body=None):
         return None, f"{type(ex).__name__}: {ex}"
 
 
-def wait_for_login(wait_s):
-    try:
-        input()
-        return
-    except EOFError:
-        pass
-    print(f"[i] 非対話: 最大 {wait_s}s 待機。別ターミナルで `python tools/reseed.py --stop` でも確定。", flush=True)
+def wait_for_login(page, got, wait_s):
+    """ログイン(=認証付き basis API 呼び出し)を自動検出するまで待つ。
+    重要: 単純な time.sleep だとヘッドフル Chromium がアイドル判定で閉じられ得るため、
+    page.wait_for_timeout で Playwright のイベントを継続的にポンプしてブラウザを生かし、
+    その副作用で on_response が発火して got['sid'] が立つのを監視する。
+    別ターミナルからの `python tools/reseed.py --stop`(SENTINEL)でも確定できる。"""
+    print(f"[i] 最大 {wait_s}s 待機。ブラウザで basis.pro にログインしてください(自動検出)。"
+          f" `python tools/reseed.py --stop` でも確定可。", flush=True)
     deadline = time.time() + wait_s
+    hb = 0
     while time.time() < deadline:
+        if got["sid"]:
+            print("[i] ログイン(認証付きAPI呼び出し)を検出。継続します。", flush=True)
+            return
         if SENTINEL.exists():
             try: SENTINEL.unlink()
             except Exception: pass
+            print("[i] --stop を検出。継続します。", flush=True)
             return
-        time.sleep(2)
+        try:
+            page.wait_for_timeout(2000)  # Playwright イベントをポンプ(閉鎖時は例外)
+        except Exception as e:
+            print(f"[warn] 待機中にブラウザ/ページが閉じられました: {e}", flush=True)
+            return
+        hb += 1
+        if hb % 5 == 0:  # 約10秒ごとに生存ハートビート
+            try: url = page.url
+            except Exception: url = "?"
+            print(f"[hb] 待機中… url={url} sid={'yes' if got['sid'] else 'no'} 残り{int(deadline - time.time())}s", flush=True)
 
 
 def extract(wait_s):
@@ -107,7 +122,7 @@ def extract(wait_s):
             try:
                 if SENTINEL.exists(): SENTINEL.unlink()
             except Exception: pass
-            wait_for_login(wait_s)
+            wait_for_login(page, got, wait_s)
         # 再読込してトークン更新と api 呼び出しを誘発
         try:
             page.goto("https://basis.pro/asset", wait_until="networkidle", timeout=60000)
