@@ -3,6 +3,18 @@ import { sql } from "@vercel/postgres";
 
 export const runtime = "nodejs";
 
+// Even G2(Even Hub WebView)など別オリジンのクライアントから直接読めるようにする。
+// このAPIは middleware で認証除外済みの公開データなので Cookie も不要。
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS });
+}
+
 export async function GET() {
   const { rows } = await sql`
     SELECT
@@ -27,5 +39,5 @@ export async function GET() {
   const data = Array.from(map.values()).sort((a, b) =>
     String(a.date).localeCompare(String(b.date))
   );
-  return NextResponse.json({ data });
+  return NextResponse.json({ data }, { headers: CORS });
 }
