@@ -33,8 +33,7 @@ export default async function DrrPage() {
           />
           <div style={{ flex: "1 1 320px", minWidth: 0 }}>
             <p style={{ fontSize: 14, margin: "0 0 12px" }}>
-              Sign up for basis.pro with my referral link and stake $100 or more by July 31, 2026 to
-              receive a 0.005 PAXG airdrop.
+              Sign up for basis.pro with my referral link!
             </p>
             <a
               href={REFERRAL_URL}
