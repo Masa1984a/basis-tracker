@@ -83,6 +83,12 @@ DRRの推移と相場(BTC価格)との連動性を観察するための個人用
 - 「失効済み access token + 有効 refresh_token」での更新は**実証済み**(access token 失効後でも
   `/sessions` は 200)。なので日次間隔でも問題なし。唯一の制約は refresh_token の30日寿命なので、
   **最低でも30日に1回は cron が成功している**必要がある(日次なら当然満たす)。
+- 別端末のブラウザで basis.pro にログインすると session_id が無効になり、翌 cron が
+  `401 E_SESSION_CONFLICT` で失敗して `needs_reseed` になる。`reseed.py` で再シードすれば復旧する。
+- cron が失敗した日は記録が欠け、復旧日の cron が欠落日ぶんをまとめて1日に計上する
+  (DRR が約 k 倍に見える)。復旧日の cron 成功後に `db/fixups/split_missing_days.sql` の
+  日付2つ(最後に成功した日 / 復旧した日)を書き換えて Neon SQL Editor で1回実行すると、
+  欠落日を合成して k 日に均等割りする(合計は保存。前提が崩れていれば何も変更せず中断)。
 
 ### 手動テスト(dry-run / 記録・投稿なし)
 
