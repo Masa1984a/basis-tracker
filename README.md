@@ -64,30 +64,35 @@ DRRの推移と相場(BTC価格)との連動性を観察するための個人用
 
 ### セットアップ
 
-1. `db/schema.sql` を再実行(`basis_session` / `basis_staking_daily` が追加される)
+1. `db/schema.sql` を再実行(`basis_session` / `basis_staking_daily` が追加される)。
+   単一アカウント時代のスキーマで作成済みの DB は `db/migrations/2026-11-06_multi_account.sql` で移行する
+   (→「複数アカウントの並行収集と切り替え」)
 2. デプロイ後、セッションを種付け(初回のみブラウザでログイン):
    ```bash
    # ローカルで実行。専用Chromiumが開くので basis.pro にログイン → /asset 表示 → Enter
-   python tools/reseed.py --post-url https://<your-app>.vercel.app
+   python tools/reseed.py --account april --post-url https://<your-app>.vercel.app
    ```
    `tools/reseed.py` がトークンを取得・検証し、`/api/basis/seed`(Basic認証)へ POST する。
-   `.env.local` の `BASIC_AUTH_USER/PASS` を使う。
+   `.env.local` の `BASIC_AUTH_USER/PASS` を使う。`--account` 省略時は `april`。
+   `--expect-email <メール>` を付けると、ログイン中のアカウントのメールが一致しない場合は POST せず中断する。
 3. 動作確認: `https://<your-app>/api/basis` を手動GET(Basic認証は対象外)。
    `{ ok: true, total_staked_usd, total_rewards_pct, ... }` が返れば成功。
-4. 状態確認: `GET /api/basis/seed`(Basic認証)で `status`(active / needs_reseed)を確認。
+4. 状態確認: `GET /api/basis/seed`(Basic認証)でアカウントごとの `status`(active / needs_reseed)と
+   `last_data_date`(最後に記録できた日)を確認。
 
 ### 運用メモ
 
 - 日次 cron が回っていればセッションは自走更新(refresh_token 30日窓)。完全失効時のみ
-  `status='needs_reseed'` になり `/api/basis` が 409 を返すので、`reseed.py` を再実行する。
+  `status='needs_reseed'` になり `/api/basis` が 409 を返すので、`reseed.py --account <name>` を再実行する。
 - 「失効済み access token + 有効 refresh_token」での更新は**実証済み**(access token 失効後でも
   `/sessions` は 200)。なので日次間隔でも問題なし。唯一の制約は refresh_token の30日寿命なので、
   **最低でも30日に1回は cron が成功している**必要がある(日次なら当然満たす)。
 - 別端末のブラウザで basis.pro にログインすると session_id が無効になり、翌 cron が
   `401 E_SESSION_CONFLICT` で失敗して `needs_reseed` になる。`reseed.py` で再シードすれば復旧する。
+  (競合するのは同じアカウントのログインだけ。別アカウントのセッションには影響しない)
 - cron が失敗した日は記録が欠け、復旧日の cron が欠落日ぶんをまとめて1日に計上する
   (DRR が約 k 倍に見える)。復旧日の cron 成功後に `db/fixups/split_missing_days.sql` の
-  日付2つ(最後に成功した日 / 復旧した日)を書き換えて Neon SQL Editor で1回実行すると、
+  アカウントと日付2つ(最後に成功した日 / 復旧した日)を書き換えて Neon SQL Editor で1回実行すると、
   欠落日を合成して k 日に均等割りする(合計は保存。前提が崩れていれば何も変更せず中断)。
 
 ### 手動テスト(dry-run / 記録・投稿なし)
@@ -110,9 +115,89 @@ curl -H "Authorization: Bearer <CRON_SECRET>" "https://<your-app>.vercel.app/api
 curl -H "Authorization: Bearer <CRON_SECRET>" "https://<your-app>.vercel.app/api/basis?dry=1&notify=1"
 ```
 
+`?account=<name>` を付けるとそのアカウントだけを実行する(例: `?dry=1&account=masa` で masa の収集確認。
+primary 以外のアカウントは `notify=1` でも投稿しない)。
+
 唯一の副作用は Privy トークンの refresh + ローテ保存(取得に必須。cron の通常動作と同じで、リワードや
 スナップショット等の**記録結果には無影響**)。このため `?dry=1` は「翌日の cron が通るか」の事前確認も
 兼ねる。`CRON_SECRET` 未設定なら Bearer ヘッダは不要。
+
+## 複数アカウントの並行収集と切り替え
+
+basis.pro の複数アカウントを並行して収集できる。アカウントは短いラベル(`april` / `masa` など、
+英小文字・数字・`_-`)で識別し、`basis_session` / `basis_staking_daily` に `account` 列で区別して記録する。
+出力(グラフ・ダッシュボード・通知)に使うのは **primary アカウントだけ**。
+
+| 記録・出力先 | primary | primary 以外(並行収集中) |
+|---|---|---|
+| `basis_staking_daily`(資産別の日次記録) | 記録する | 記録する |
+| `snapshots` / `daily_rewards`(ダッシュボード) | 記録する | 記録しない |
+| `/drr` グラフ(`/api/drr`) | 表示する | 表示しない |
+| Telegram / Discord | 投稿する | 投稿しない |
+
+環境変数(Vercel。変更後は再デプロイ):
+
+- `BASIS_PRIMARY_ACCOUNT`: 出力対象のアカウント。未設定なら `april`(移行前の既存データの帰属先)。
+- `BASIS_ACCOUNTS`: 毎日 cron で収集するアカウント(カンマ区切り)。primary は書かなくても含まれ、常に最初に処理される。
+  1アカウントが失敗しても他アカウントの収集・通知は続行する(primary 以外の結果は `/api/basis` レスポンスの `others`)。
+
+### april → masa への移行手順
+
+**0. DB 移行とデプロイ(1回だけ)**
+
+1. Neon SQL Editor で `db/migrations/2026-11-06_multi_account.sql` を実行する(既存行はすべて `april` に帰属。
+   april の再シードは不要)。
+2. 続けて main を push してデプロイする。移行後は旧コードが動かないので、この2つは間を空けずに行い、
+   cron の時刻(09:05 / 09:15 JST)の前後は避ける。env を追加しなければ従来どおり april だけを収集する。
+3. `GET /api/basis/seed` で april が `active`、`/api/basis?dry=1` が `ok: true` になることを確認する。
+
+**1. masa を種付けする**
+
+```bash
+python tools/reseed.py --account masa --expect-email <masa のメールアドレス> --post-url https://<your-app>.vercel.app
+```
+
+- masa 用の新しいブラウザプロファイル(`.pw-basis-profile-masa/`)が開くので、**masa のアカウントで**ログインする。
+  april 用のプロファイル(`.pw-basis-profile/`)でアカウントを切り替えてはいけない。april のセッションが
+  無効になり、翌日の cron が `SESSION_CONFLICT` で失敗する。
+- 確認: `curl -H "Authorization: Bearer <CRON_SECRET>" "https://<your-app>.vercel.app/api/basis?dry=1&account=masa"`
+  が `ok: true` を返せばよい(何も記録しない)。
+
+**2. 並行収集を始める**
+
+- Vercel の env に `BASIS_ACCOUNTS=april,masa` を追加して再デプロイする(`BASIS_PRIMARY_ACCOUNT` は未設定 = april のまま)。
+- 以後の cron は april → masa の順に収集する。グラフ・ダッシュボード・Telegram / Discord は引き続き april だけ。
+  masa は初日に基準スナップショットを置くだけで、2日目からリワード(差分)が入る。
+
+**3. 安定を確認する**
+
+- `GET /api/basis/seed`(Basic 認証): masa が `status: active` のまま、`last_data_date` が毎日進み、`last_error` が空であること。
+- 資産別 DRR を april と並べて確認する(Neon SQL Editor)。毎日両方の行がそろい、値が近ければよい:
+
+  ```sql
+  select date, asset,
+         round(max(reward_crypto / nullif(total_staked, 0) * 100) filter (where account = 'april'), 4) as april_drr,
+         round(max(reward_crypto / nullif(total_staked, 0) * 100) filter (where account = 'masa'), 4) as masa_drr
+  from basis_staking_daily
+  where date >= current_date - 14
+  group by date, asset
+  order by date desc, asset;
+  ```
+
+- masa の cron が欠けた日は `db/fixups/split_missing_days.sql` を `v_account = 'masa'` / `v_primary = false` で使う
+  (`basis_staking_daily` だけを補正し、`daily_rewards` には触らない)。
+
+**4. 切り替える**
+
+- `BASIS_PRIMARY_ACCOUNT=masa` にして再デプロイする。april の収集もやめるなら `BASIS_ACCOUNTS=masa`
+  (`BASIS_ACCOUNTS` を外してもよい)。april のセッション行と過去データは DB に残り、使われないだけになる。
+- 切り替え後の履歴の見え方(切り替え前に方針を決めておく):
+  - `/drr` グラフは primary の行だけを表示するので、表示は masa の収集開始日(手順 2)以降になる。
+    それより前の april の履歴は表示されなくなる(DB には残る)。
+  - ダッシュボード(`daily_rewards` / `snapshots`)は、切り替え日までは april の値、以降は masa の値が同じ表に続く。
+    ステーク額が違えば USD 建ての値に段差ができる。
+  - ダッシュボードの DRR% は `daily_rewards` を時刻が最も近い `snapshots` の `total_staked_usd` で割る。
+    切り替え直後の1日は masa のリワードを直前の april のステーク額で割った点が1つ混ざる。
 
 ## Asset サマリの Telegram / Discord 投稿(daily cron の付随機能)
 

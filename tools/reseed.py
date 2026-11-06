@@ -9,8 +9,16 @@
   3. 純HTTPで [refresh → データ取得] を実行し、basis用トークンのフィールドを確定。
      回転した refresh_token は即保存。
   4. (任意) --post-url 指定時は seed を /api/basis/seed に Basic 認証付きで POST。
+
+複数アカウント:
+  --account <name> でアカウント(basis_session.account)を指定する(既定 april)。
+  ブラウザプロファイルと secrets はアカウントごとに分ける。同じプロファイルで別アカウントに
+  ログインし直すと、元アカウントのセッションが無効になり cron が SESSION_CONFLICT で落ちるため。
+    april(既定)   : .pw-basis-profile/          debug/session_secrets.json   (従来どおり)
+    それ以外(masa 等): .pw-basis-profile-<name>/  debug/session_secrets-<name>.json
+  --expect-email を付けると、ログイン中の Privy ユーザーのメールが一致しない場合に POST せず中断する。
 """
-import argparse, base64, json, sys, time, urllib.request, urllib.error, ssl
+import argparse, base64, json, re, sys, time, urllib.request, urllib.error, ssl
 from pathlib import Path
 
 for _s in (sys.stdout, sys.stderr):
@@ -20,9 +28,31 @@ for _s in (sys.stdout, sys.stderr):
 from playwright.sync_api import sync_playwright
 
 PROJECT = Path(__file__).resolve().parent.parent
+LEGACY_ACCOUNT = "april"  # 複数アカウント対応前からのアカウント(従来のパスをそのまま使う)
+ACCOUNT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")  # src/lib/accounts.ts と同じ
+# main() で --account に応じて差し替える
 PROFILE = PROJECT / ".pw-basis-profile"
 OUT = PROJECT / "debug" / "session_secrets.json"
 SENTINEL = PROJECT / "debug" / ".reseed_done"
+
+
+def paths_for(account):
+    if account == LEGACY_ACCOUNT:
+        return PROJECT / ".pw-basis-profile", PROJECT / "debug" / "session_secrets.json"
+    return PROJECT / f".pw-basis-profile-{account}", PROJECT / "debug" / f"session_secrets-{account}.json"
+
+
+def user_emails(user):
+    """Privy の user オブジェクト(/sessions レスポンス)から紐づくメールアドレスを集める。"""
+    out = []
+    for la in (user or {}).get("linked_accounts") or []:
+        if not isinstance(la, dict):
+            continue
+        for k in ("address", "email"):
+            v = la.get(k)
+            if isinstance(v, str) and "@" in v and v.lower() not in out:
+                out.append(v.lower())
+    return out
 APP_ID = "cmo84wtol002q0cihr61zf6gg"
 CTX = ssl.create_default_context()
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
@@ -147,7 +177,7 @@ def save(secrets):
     OUT.write_text(json.dumps(secrets, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def verify(secrets):
+def verify(secrets, expect_email=None):
     privy = secrets["privy"]; basis = secrets["basis"]
     ls = privy.get("from_localStorage", {})
     refresh_token = privy.get("refresh_token") or ls.get("privy:refresh_token")
@@ -174,8 +204,17 @@ def verify(secrets):
         privy.setdefault("from_localStorage", {})["privy:refresh_token"] = j["refresh_token"]
     if j.get("privy_access_token"): privy["privy_access_token"] = j["privy_access_token"]
     if j.get("token"): privy["token"] = j["token"]
+    emails = user_emails(j.get("user"))
+    privy["emails"] = emails
     save(secrets)
     print("   保存済み。戻りキー:", list(j.keys()))
+    print(f"   ログイン中のアカウント: {', '.join(emails) if emails else '(メール不明)'}")
+    if expect_email:
+        if expect_email.strip().lower() not in emails:
+            print(f"✗ --expect-email {expect_email} と一致しません。別アカウントでログインしている可能性。"
+                  " POST せず中断します(このプロファイルでログインし直して再実行)。")
+            return False
+        print(f"   ✓ --expect-email と一致")
 
     # basis 用トークン = aud==APP_ID のもの を自動選別
     candidates = {"token": j.get("token"), "privy_access_token": j.get("privy_access_token"),
@@ -216,15 +255,30 @@ def verify(secrets):
 
 
 def main():
+    global PROFILE, OUT
     ap = argparse.ArgumentParser()
     ap.add_argument("--stop", action="store_true")
     ap.add_argument("--wait", type=int, default=600)
     ap.add_argument("--verify-only", action="store_true", help="ブラウザを起動せず既存 secrets で検証")
     ap.add_argument("--post-url", default=None, help="seed を POST する先(例 https://app.vercel.app)。.env.local の BASIC_AUTH を使用")
+    ap.add_argument("--account", default=LEGACY_ACCOUNT,
+                    help=f"種付けするアカウント(basis_session.account)。既定 {LEGACY_ACCOUNT}。"
+                         "アカウントごとに別のブラウザプロファイルを使う")
+    ap.add_argument("--expect-email", default=None,
+                    help="ログイン中の Privy ユーザーのメールがこれと一致しなければ POST せず中断")
     a = ap.parse_args()
     if a.stop:
         SENTINEL.parent.mkdir(parents=True, exist_ok=True); SENTINEL.write_text("stop", encoding="utf-8")
         print("stop シグナル送信"); return
+
+    account = a.account.strip().lower()
+    if not ACCOUNT_RE.match(account):
+        print(f"✗ --account が不正: {a.account}(英小文字・数字・_- の32文字以内)"); sys.exit(2)
+    PROFILE, OUT = paths_for(account)
+    print(f"[i] account={account} profile={PROFILE.name} secrets={OUT.relative_to(PROJECT)}", flush=True)
+    if not a.verify_only and not PROFILE.exists():
+        print(f"[i] 新規プロファイルです。開いたブラウザで {a.expect_email or account} のアカウントでログインしてください。",
+              flush=True)
 
     if a.verify_only:
         secrets = json.loads(OUT.read_text(encoding="utf-8"))
@@ -232,14 +286,14 @@ def main():
         secrets, got = extract(a.wait)
         if not got["sid"]:
             print("✗ 認証付き呼び出しを検出できず(未ログインの可能性)。"); sys.exit(1)
-    ok = verify(secrets)
+    ok = verify(secrets, a.expect_email)
 
     if ok and a.post_url:
-        post_seed(secrets, a.post_url)
+        post_seed(secrets, a.post_url, account)
     sys.exit(0 if ok else 1)
 
 
-def post_seed(secrets, base_url):
+def post_seed(secrets, base_url, account):
     """seed を /api/basis/seed に Basic 認証で POST(.env.local から認証情報を読む)。"""
     env = {}
     envf = PROJECT / ".env.local"
@@ -250,6 +304,7 @@ def post_seed(secrets, base_url):
     user = env.get("BASIC_AUTH_USER"); pw = env.get("BASIC_AUTH_PASS")
     privy = secrets["privy"]
     payload = {
+        "account": account,
         "refresh_token": privy.get("refresh_token"),
         "privy_access_token": privy.get("privy_access_token"),
         "session_id": secrets["basis"].get("session_id"),

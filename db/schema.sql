@@ -26,22 +26,26 @@ create table if not exists market_daily (
 );
 
 -- ===== basis.pro 内部API(Path B)用 =====
--- Privy セッションの保管(単一行 id=1)。refresh_token は使うたびローテーションするので
--- /api/basis 実行のたびに上書きされる。tools/reseed.py または /api/basis/seed で種付けする。
+-- 複数アカウントを並行収集できる(account = アカウントのラベル。src/lib/accounts.ts)。
+-- snapshots / daily_rewards は出力対象(BASIS_PRIMARY_ACCOUNT)のアカウントだけが書く。
+-- 既存DB(単一アカウント時代のスキーマ)は db/migrations/2026-11-06_multi_account.sql で移行する。
+--
+-- Privy セッションの保管(アカウントごとに1行)。refresh_token は使うたびローテーションするので
+-- /api/basis 実行のたびに上書きされる。tools/reseed.py --account <name> で種付けする。
 create table if not exists basis_session (
-  id int primary key default 1,
+  account text primary key,           -- アカウントのラベル(april / masa 等)
   refresh_token text not null,        -- Privy リフレッシュトークン(30日・1回限り)
   privy_access_token text,            -- /sessions 呼び出し用(期限切れでも可)
   session_id text not null,           -- basis の x-app-sid(member/user が発行)
   status text not null default 'active', -- active | needs_reseed
   last_error text,
-  updated_at timestamptz not null default now(),
-  constraint basis_session_singleton check (id = 1)
+  updated_at timestamptz not null default now()
 );
 
 -- basis API から取得した資産別の日次スナップショット(暗号建ての忠実な記録)。
 -- USD 換算値も併記してダッシュボード(USD建て)と接続する。
 create table if not exists basis_staking_daily (
+  account text not null,              -- basis_session.account
   date date not null,
   asset text not null,                -- stBTC / stETH / stSOL / stPAXG
   total_staked numeric(24,8),
@@ -59,5 +63,5 @@ create table if not exists basis_staking_daily (
   reward_usd numeric(16,2),
   raw jsonb,
   taken_at timestamptz not null default now(),
-  primary key (date, asset)
+  primary key (account, date, asset)
 );

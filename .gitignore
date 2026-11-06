@@ -14,7 +14,7 @@ telegram.txt
 # Privy refresh_token / session_id / ネットワークキャプチャ(認証トークン入り)
 debug/
 # ブラウザの専用プロファイル(ログインセッション・Cookie)
-.pw-basis-profile/
+.pw-basis-profile*/
 
 # python
 tools/__pycache__/

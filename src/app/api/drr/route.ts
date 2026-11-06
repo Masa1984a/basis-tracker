@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sql } from "@vercel/postgres";
+import { primaryAccount } from "@/lib/accounts";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,8 @@ export async function OPTIONS() {
 }
 
 export async function GET() {
+  // グラフは出力対象(primary)アカウントのみ。並行収集中の他アカウントは混ぜない。
+  const account = primaryAccount();
   const { rows } = await sql`
     SELECT
       date::text,
@@ -24,7 +27,8 @@ export async function GET() {
         THEN (reward_crypto / total_staked * 100)::float8
       END AS drr
     FROM basis_staking_daily
-    WHERE reward_crypto IS NOT NULL AND total_staked > 0
+    WHERE account = ${account}
+      AND reward_crypto IS NOT NULL AND total_staked > 0
       AND date >= '2026-06-27'
     ORDER BY date, asset`;
 

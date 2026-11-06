@@ -5,6 +5,7 @@ import { encryptSecret, decryptSecret } from "@/lib/crypto";
 // 認証は Privy。/sessions で privy_access_token を更新し、それを Bearer として
 // api.basis.pro を叩く(x-app-sid に保存済み session_id を付ける)。
 // member/user(session_id 発行)は暗号化必須なので cron では使わず、種付け時の値を再利用する。
+// セッションはアカウント(basis_session.account)ごとに独立して保存・更新する(src/lib/accounts.ts)。
 
 export const PRIVY_APP_ID = "cmo84wtol002q0cihr61zf6gg";
 const PRIVY_SESSIONS = "https://auth.privy.io/api/v1/sessions";
@@ -49,10 +50,10 @@ export type BasisData = {
   able: Record<string, string>;
 };
 
-export async function loadSession(): Promise<BasisSession | null> {
+export async function loadSession(account: string): Promise<BasisSession | null> {
   const { rows } = await sql<BasisSession>`
     select refresh_token, privy_access_token, session_id
-    from basis_session where id = 1`;
+    from basis_session where account = ${account}`;
   const r = rows[0];
   if (!r?.refresh_token || !r?.session_id) return null;
   // 保存時に暗号化されたトークンは復号して返す(平文のままのデータはそのまま通る)。
@@ -64,27 +65,31 @@ export async function loadSession(): Promise<BasisSession | null> {
   };
 }
 
-async function persistTokens(refreshToken: string, privyAccessToken: string | null) {
+async function persistTokens(account: string, refreshToken: string, privyAccessToken: string | null) {
   // SESSION_ENC_KEY 設定時は暗号化して保存(未設定なら平文のまま= encryptSecret が素通し)。
-  await sql`
+  // 必ず自アカウントの行だけを更新する(他アカウントの refresh_token を上書きすると復旧に再シードが要る)。
+  const r = await sql`
     update basis_session
       set refresh_token = ${encryptSecret(refreshToken)},
           privy_access_token = ${encryptSecret(privyAccessToken)},
           status = 'active', last_error = null, updated_at = now()
-    where id = 1`;
+    where account = ${account}`;
+  if (r.rowCount !== 1) {
+    throw new Error(`basis_session(account=${account})の更新に失敗(${r.rowCount} 行)`);
+  }
 }
 
-export async function markNeedsReseed(message: string) {
+export async function markNeedsReseed(account: string, message: string) {
   await sql`
     update basis_session
       set status = 'needs_reseed', last_error = ${message.slice(0, 500)}, updated_at = now()
-    where id = 1`;
+    where account = ${account}`;
 }
 
 // Privy セッションを更新。refresh_token は1回限り(ローテ)なので、成功したら
 // 「データ取得の前に」即保存する(途中失敗で回転後トークンを失わないため)。
 // 返すのは basis 用 Bearer として使う privy_access_token。
-export async function refreshPrivy(s: BasisSession): Promise<string> {
+export async function refreshPrivy(account: string, s: BasisSession): Promise<string> {
   const headers: Record<string, string> = {
     accept: "application/json",
     "content-type": "application/json",
@@ -123,7 +128,7 @@ export async function refreshPrivy(s: BasisSession): Promise<string> {
   if (!newAccess || !newRefresh) {
     throw new BasisReseedError("Privy refresh のレスポンスにトークンがありません");
   }
-  await persistTokens(newRefresh, newAccess); // ローテ即保存
+  await persistTokens(account, newRefresh, newAccess); // ローテ即保存
   return newAccess;
 }
 
