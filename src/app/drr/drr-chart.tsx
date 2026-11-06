@@ -130,7 +130,7 @@ export default function DrrChart() {
                   dataKey={key}
                   stroke={color}
                   strokeWidth={2}
-                  dot={{ r: 3, fill: color }}
+                  dot={{ r: 2, fill: color, strokeWidth: 0 }}
                   activeDot={{ r: 5 }}
                   isAnimationActive={false}
                   connectNulls
