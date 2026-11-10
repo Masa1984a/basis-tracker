@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { sql } from "@vercel/postgres";
-import { primaryAccount } from "@/lib/accounts";
+import { displayStitch } from "@/lib/accounts";
 
 export const runtime = "nodejs";
 
@@ -18,18 +18,22 @@ export async function OPTIONS() {
 
 export async function GET() {
   // グラフは出力対象(primary)アカウントのみ。並行収集中の他アカウントは混ぜない。
-  const account = primaryAccount();
+  // 切り替え後は、切り替え前の期間を旧 primary(april)の DRR × 係数でつなぐ(src/lib/accounts.ts)。
+  const s = displayStitch();
   const { rows } = await sql`
     SELECT
       date::text,
       asset,
-      CASE WHEN total_staked > 0
-        THEN (reward_crypto / total_staked * 100)::float8
-      END AS drr
+      (reward_crypto / total_staked * 100
+        * CASE WHEN date < ${s.runDateFrom}::date THEN ${s.legacyDrrScale}::float8 ELSE 1 END
+      )::float8 AS drr
     FROM basis_staking_daily
-    WHERE account = ${account}
-      AND reward_crypto IS NOT NULL AND total_staked > 0
+    WHERE reward_crypto IS NOT NULL AND total_staked > 0
       AND date >= '2026-06-27'
+      AND (
+        (account = ${s.primary} AND date >= ${s.runDateFrom}::date)
+        OR (account = ${s.legacyAccount} AND date < ${s.runDateFrom}::date)
+      )
     ORDER BY date, asset`;
 
   const map = new Map<string, Record<string, number | string>>();

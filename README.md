@@ -132,7 +132,7 @@ basis.pro の複数アカウントを並行して収集できる。アカウン�
 |---|---|---|
 | `basis_staking_daily`(資産別の日次記録) | 記録する | 記録する |
 | `snapshots` / `daily_rewards`(ダッシュボード) | 記録する | 記録しない |
-| `/drr` グラフ(`/api/drr`) | 表示する | 表示しない |
+| `/drr` グラフ(`/api/drr`) | 表示する(切り替え前の期間は旧 primary を換算してつなぐ。手順 4) | 表示しない |
 | Telegram / Discord | 投稿する | 投稿しない |
 
 環境変数(Vercel。変更後は再デプロイ):
@@ -172,7 +172,8 @@ python tools/reseed.py --account masa --expect-email <masa のメールアドレ
 **3. 安定を確認する**
 
 - `GET /api/basis/seed`(Basic 認証): masa が `status: active` のまま、`last_data_date` が毎日進み、`last_error` が空であること。
-- 資産別 DRR を april と並べて確認する(Neon SQL Editor)。毎日両方の行がそろい、値が近ければよい:
+- 資産別 DRR を april と並べて確認する(Neon SQL Editor)。毎日両方の行がそろっていればよい。
+  april は 100% ブーストをかけているので、april の値が masa の約 2 倍になるのが正常:
 
   ```sql
   select date, asset,
@@ -189,15 +190,23 @@ python tools/reseed.py --account masa --expect-email <masa のメールアドレ
 
 **4. 切り替える**
 
-- `BASIS_PRIMARY_ACCOUNT=masa` にして再デプロイする。april の収集もやめるなら `BASIS_ACCOUNTS=masa`
-  (`BASIS_ACCOUNTS` を外してもよい)。april のセッション行と過去データは DB に残り、使われないだけになる。
-- 切り替え後の履歴の見え方(切り替え前に方針を決めておく):
-  - `/drr` グラフは primary の行だけを表示するので、表示は masa の収集開始日(手順 2)以降になる。
-    それより前の april の履歴は表示されなくなる(DB には残る)。
-  - ダッシュボード(`daily_rewards` / `snapshots`)は、切り替え日までは april の値、以降は masa の値が同じ表に続く。
-    ステーク額が違えば USD 建ての値に段差ができる。
-  - ダッシュボードの DRR% は `daily_rewards` を時刻が最も近い `snapshots` の `total_staked_usd` で割る。
-    切り替え直後の1日は masa のリワードを直前の april のステーク額で割った点が1つ混ざる。
+- Vercel の env を `BASIS_PRIMARY_ACCOUNT=masa` / `BASIS_ACCOUNTS=masa` にしてから再デプロイする
+  (april の収集を続けるなら `BASIS_ACCOUNTS=april,masa` のまま)。cron の時刻(09:05 / 09:15 JST)の前後は避ける。
+  april のセッション行と過去データは DB に残り、使われないだけになる。
+- 2026-11-10 にこの手順で切り替えた。masa の値を使うのは 2026-11-11 00:15 UTC の cron から。
+- 切り替え後の見え方(`src/lib/accounts.ts` の `displayStitch()`。DB の記録値は変えず、API の返り値だけを換算する):
+  - **`/drr` グラフ**:
+    - `basis_staking_daily.date` が 2026-11-10 以前の日は april の DRR を **1/2** にして表示する。
+      april は 100% ブーストで masa の約 2 倍のため、こうすると masa の値と連続する。
+    - 2026-11-11 以降は masa の値をそのまま表示する。並行収集中の masa の行(11/7〜11/10)は使わない。
+  - **ダッシュボード**:
+    - DRR% と 7日平均DRR は、`daily_rewards.date` が 2026-11-09 以前の日だけ 1/2 にする。
+      `daily_rewards.date` は稼いだ日(実行日の前日)なので、境目が `/drr` より1日早い。
+    - 日次Profit と Staked は実額のまま表示する。2026-11-10 から masa の値になり、USD 建ての値は大きく下がる。
+  - **ダッシュボードの DRR% の分母**: 同じ日のリワードを書いたアカウントの `snapshots`(時刻が最も近いもの)の
+    `total_staked_usd` にする。account を持たない古い snapshot は april のものとして扱う。
+  - **Telegram / Discord**: 2026-11-11 の投稿から masa の値になる。
+  - `BASIS_PRIMARY_ACCOUNT` が april(未設定)のあいだは連結せず、従来どおり april の値をそのまま表示する。
 
 ## Asset サマリの Telegram / Discord 投稿(daily cron の付随機能)
 
