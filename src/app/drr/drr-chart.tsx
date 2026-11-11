@@ -87,8 +87,11 @@ export default function DrrChart() {
         basis.pro staking · DRR = daily reward ÷ amount staked × 100
         {dateRange && ` · ${dateRange}`}
       </p>
+      {/* 切り替え日と係数は src/lib/accounts.ts の displayStitch()(/api/drr の換算)と合わせる */}
       <p style={{ fontSize: 13, color: "var(--dim, #888)", margin: "0 0 24px" }}>
-        Rates include the 180-day lock bonus (+100%) — the base DRR is roughly half these figures.
+        Rates through Nov 10, 2026 were measured on an account with the 180-day lock bonus (+100%)
+        and are halved to show the base rate. From Nov 11, 2026, rates are measured on a monitoring
+        account without the bonus and shown as is.
       </p>
 
       {loading ? (

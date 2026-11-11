@@ -105,6 +105,15 @@ export function buildAssetCard(input: {
   };
 }
 
+// USD の小数桁(カード画像とキャプションで共通)。ステークが約 $180 の masa でも値が 0 に丸まらないよう、
+// 資産別リワードは 4 桁まで出す(例: stETH +$0.0038)。24h Profit は daily_rewards の保存精度(3 桁)に合わせる。
+const USD_FRAC = {
+  staked: 2, // Total Staked / 資産別 Staked
+  totalRewards: 2, // Total Rewards(累積)
+  profit: 3, // 24h Profit
+  reward: 4, // 資産別 Reward(USD)
+} as const;
+
 function fmtUsd(n: number | null | undefined, frac = 0): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return (
@@ -116,7 +125,7 @@ function fmtPct(n: number | null | undefined, d = 3): string {
   return n.toFixed(d) + "%";
 }
 // ステーク利益のUSD換算(リワードは 0 以上。プラスは "+" を付ける)。ASCII のみ(Satori フォント都合)。
-function fmtRewardUsd(n: number | null | undefined, frac = 2): string {
+function fmtRewardUsd(n: number | null | undefined, frac: number = USD_FRAC.reward): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return (n > 0 ? "+" : "") + fmtUsd(n, frac);
 }
@@ -135,11 +144,15 @@ function signColor(n: number | null | undefined): string {
 
 // Telegram の写真キャプション(画像が表示できない環境でも要点が分かるよう本文にも要約を入れる)。
 export function assetCardCaption(c: AssetCardData): string {
-  const lines = [`📊 BASIS Asset — ${c.date}`, `Staked: ${fmtUsd(c.totalStakedUsd)}`];
+  const lines = [`📊 BASIS Asset — ${c.date}`, `Staked: ${fmtUsd(c.totalStakedUsd, USD_FRAC.staked)}`];
   if (c.yesterdayProfitUsd != null) {
-    lines.push(`24h reward: +${fmtUsd(c.yesterdayProfitUsd, 2)} (DRR ${fmtPct(c.yesterdayDrrPct)})`);
+    lines.push(
+      `24h reward: +${fmtUsd(c.yesterdayProfitUsd, USD_FRAC.profit)} (DRR ${fmtPct(c.yesterdayDrrPct)})`
+    );
   }
-  lines.push(`Total rewards: ${fmtUsd(c.totalRewardsUsd)} (${fmtPct(c.totalRewardsPct, 2)})`);
+  lines.push(
+    `Total rewards: ${fmtUsd(c.totalRewardsUsd, USD_FRAC.totalRewards)} (${fmtPct(c.totalRewardsPct, 2)})`
+  );
   // 資産別: その日のステーク利益を coin(増えた通貨量)と USD 換算で併記。
   const per = c.rows
     .filter((r) => r.tokenReward != null || r.rewardUsd != null)
@@ -222,17 +235,17 @@ function cardElement(c: AssetCardData) {
 
       {/* 3つのサマリ */}
       <div style={{ display: "flex", flexDirection: "row", marginTop: 28 }}>
-        {statBox("Total Staked", fmtUsd(c.totalStakedUsd), C.text, null, false)}
+        {statBox("Total Staked", fmtUsd(c.totalStakedUsd, USD_FRAC.staked), C.text, null, false)}
         {statBox(
           "24h Profit",
-          c.yesterdayProfitUsd != null ? "+" + fmtUsd(c.yesterdayProfitUsd, 2) : "—",
+          c.yesterdayProfitUsd != null ? "+" + fmtUsd(c.yesterdayProfitUsd, USD_FRAC.profit) : "—",
           C.green,
           c.yesterdayProfitUsd != null ? "DRR " + fmtPct(c.yesterdayDrrPct) : null,
           false
         )}
         {statBox(
           "Total Rewards",
-          fmtUsd(c.totalRewardsUsd),
+          fmtUsd(c.totalRewardsUsd, USD_FRAC.totalRewards),
           C.green,
           c.totalRewardsPct != null ? fmtPct(c.totalRewardsPct, 2) + " of staked" : null,
           true
@@ -290,7 +303,7 @@ function cardElement(c: AssetCardData) {
               <div style={{ display: "flex", color: C.dim, fontSize: 13 }}>{r.baseTicker}</div>
             </div>
             <div style={{ display: "flex", flexGrow: 1, justifyContent: "flex-end" }}>
-              {fmtUsd(r.stakedUsd)}
+              {fmtUsd(r.stakedUsd, USD_FRAC.staked)}
             </div>
             <div
               style={{
