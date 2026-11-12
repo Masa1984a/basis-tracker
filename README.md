@@ -115,8 +115,9 @@ curl -H "Authorization: Bearer <CRON_SECRET>" "https://<your-app>.vercel.app/api
 curl -H "Authorization: Bearer <CRON_SECRET>" "https://<your-app>.vercel.app/api/basis?dry=1&notify=1"
 ```
 
-`?account=<name>` を付けるとそのアカウントだけを実行する(例: `?dry=1&account=masa` で masa の収集確認。
-primary 以外のアカウントは `notify=1` でも投稿しない)。
+`?account=<name>` を付けるとそのアカウントだけを実行する(例: `?dry=1&account=masa` で masa の収集確認)。
+投稿アカウント(`BASIS_NOTIFY_ACCOUNT`)以外は `notify=1` でも投稿しない。逆に投稿アカウントを `?dry=1` なしで
+指定すると、cron と同じく **Telegram / Discord に投稿する**。
 
 唯一の副作用は Privy トークンの refresh + ローテ保存(取得に必須。cron の通常動作と同じで、リワードや
 スナップショット等の**記録結果には無影響**)。このため `?dry=1` は「翌日の cron が通るか」の事前確認も
@@ -126,20 +127,25 @@ primary 以外のアカウントは `notify=1` でも投稿しない)。
 
 basis.pro の複数アカウントを並行して収集できる。アカウントは短いラベル(`april` / `masa` など、
 英小文字・数字・`_-`)で識別し、`basis_session` / `basis_staking_daily` に `account` 列で区別して記録する。
-出力(グラフ・ダッシュボード・通知)に使うのは **primary アカウントだけ**。
+グラフとダッシュボードには **primary アカウント**、Telegram / Discord には **投稿アカウント**
+(未設定なら primary と同じ)の値を使う。
 
-| 記録・出力先 | primary | primary 以外(並行収集中) |
-|---|---|---|
-| `basis_staking_daily`(資産別の日次記録) | 記録する | 記録する |
-| `snapshots` / `daily_rewards`(ダッシュボード) | 記録する | 記録しない |
-| `/drr` グラフ(`/api/drr`) | 表示する(切り替え前の期間は旧 primary を換算してつなぐ。手順 4) | 表示しない |
-| Telegram / Discord | 投稿する | 投稿しない |
+| 記録・出力先 | primary | 投稿アカウント | それ以外(並行収集中) |
+|---|---|---|---|
+| `basis_staking_daily`(資産別の日次記録) | 記録する | 記録する | 記録する |
+| `snapshots` / `daily_rewards`(ダッシュボード) | 記録する | 記録しない | 記録しない |
+| `/drr` グラフ(`/api/drr`) | 表示する(切り替え前の期間は旧 primary を換算してつなぐ。手順 4) | 表示しない | 表示しない |
+| Telegram / Discord | 投稿しない | 投稿する | 投稿しない |
+
+(primary と投稿アカウントが同じなら、その1アカウントがすべてを担う。)
 
 環境変数(Vercel。変更後は再デプロイ):
 
-- `BASIS_PRIMARY_ACCOUNT`: 出力対象のアカウント。未設定なら `april`(移行前の既存データの帰属先)。
-- `BASIS_ACCOUNTS`: 毎日 cron で収集するアカウント(カンマ区切り)。primary は書かなくても含まれ、常に最初に処理される。
-  1アカウントが失敗しても他アカウントの収集・通知は続行する(primary 以外の結果は `/api/basis` レスポンスの `others`)。
+- `BASIS_PRIMARY_ACCOUNT`: グラフ・ダッシュボードの対象。未設定なら `april`(移行前の既存データの帰属先)。
+- `BASIS_NOTIFY_ACCOUNT`: Telegram / Discord に投稿するアカウント。未設定なら primary。
+- `BASIS_ACCOUNTS`: 毎日 cron で収集するアカウント(カンマ区切り)。primary と投稿アカウントは書かなくても含まれる
+  (primary が最初)。1アカウントが失敗しても他アカウントの収集は続行する(primary 以外の結果は `/api/basis`
+  レスポンスの `others`)。投稿アカウントの取得に失敗した日は投稿しない(別アカウントの値では代用しない)。
 
 ### april → masa への移行手順
 
@@ -207,6 +213,20 @@ python tools/reseed.py --account masa --expect-email <masa のメールアドレ
     `total_staked_usd` にする。account を持たない古い snapshot は april のものとして扱う。
   - **Telegram / Discord**: 2026-11-11 の投稿から masa の値になる。
   - `BASIS_PRIMARY_ACCOUNT` が april(未設定)のあいだは連結せず、従来どおり april の値をそのまま表示する。
+
+**5. 投稿だけ april に戻す(2026-11-12)**
+
+- 方針変更: グラフ・ダッシュボードは masa のまま、Telegram / Discord は実際の保有額(april)を投稿する。
+  env に `BASIS_NOTIFY_ACCOUNT=april` を追加して再デプロイする(`BASIS_PRIMARY_ACCOUNT=masa` /
+  `BASIS_ACCOUNTS=masa` はそのまま。april は投稿アカウントとして自動で収集対象に入る)。
+- april は 11/10 を最後に収集を止めていたので、そのまま再開すると翌日の 24h Profit が数日分になる。
+  そこで 11/12 05:35 UTC に `?account=april`(この時点の april は primary でも投稿アカウントでもないので、
+  `basis_staking_daily` だけを記録)で仮取得した。続けて `db/fixups/backdate_manual_fetch.sql` で、その行を
+  11/12 00:15 UTC 時点の値に補正する。11/13 の投稿から april の値になる。
+- april が再び毎日の cron 対象になったので、april に別端末でログインすると翌日の取得が `SESSION_CONFLICT` で
+  失敗し、その日は投稿されない(グラフ・ダッシュボードの masa は影響を受けない)。`reseed.py --account april`
+  で再シードすれば復旧する。
+- `/api/basis/card`(カードのプレビュー)は `snapshots` から作るので、引き続き primary(masa)の内容になる。
 
 ## Asset サマリの Telegram / Discord 投稿(daily cron の付随機能)
 

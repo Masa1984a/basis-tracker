@@ -4,11 +4,14 @@
 //   basis_staking_daily.account の値になる。メールアドレスそのものはコードにも DB にも置かない。
 // - BASIS_PRIMARY_ACCOUNT: 出力対象(/drr グラフ・ダッシュボード用の snapshots / daily_rewards・
 //   Telegram / Discord 投稿)となるアカウント。未設定なら既存データの帰属先である "april"。
+// - BASIS_NOTIFY_ACCOUNT: Telegram / Discord に投稿するアカウント。未設定なら primary。
+//   primary と別にすると、グラフ・ダッシュボードは primary、投稿はこのアカウントの値になる。
 // - BASIS_ACCOUNTS: 毎日 cron で収集するアカウント(カンマ/セミコロン/空白区切り)。
-//   primary は書かなくても常に含まれ、常に先頭で処理される。
+//   primary と投稿アカウントは書かなくても常に含まれる(primary が先頭)。
 //
 // 例) 並行運用中:   BASIS_PRIMARY_ACCOUNT=april  BASIS_ACCOUNTS=april,masa
 //     切り替え後:   BASIS_PRIMARY_ACCOUNT=masa   BASIS_ACCOUNTS=masa(april の収集を止める場合)
+//     2026-11-13〜: BASIS_PRIMARY_ACCOUNT=masa   BASIS_NOTIFY_ACCOUNT=april(グラフは masa、投稿は april)
 //     切り替え前の april の履歴の見せ方は下の displayStitch() を参照。
 
 export const DEFAULT_ACCOUNT = "april";
@@ -32,14 +35,18 @@ export function primaryAccount(): string {
   return raw ? normalize(raw, "BASIS_PRIMARY_ACCOUNT") : DEFAULT_ACCOUNT;
 }
 
-// 収集するアカウント一覧(primary が先頭、重複除去)。
+export function notifyAccount(): string {
+  const raw = process.env.BASIS_NOTIFY_ACCOUNT?.trim();
+  return raw ? normalize(raw, "BASIS_NOTIFY_ACCOUNT") : primaryAccount();
+}
+
+// 収集するアカウント一覧(primary が先頭、次に投稿アカウント、重複除去)。
 export function collectAccounts(): string[] {
-  const primary = primaryAccount();
   const listed = (process.env.BASIS_ACCOUNTS ?? "")
     .split(/[,;\s]+/)
     .filter(Boolean)
     .map((a) => normalize(a, "BASIS_ACCOUNTS"));
-  return [primary, ...listed.filter((a) => a !== primary)].filter((a, i, arr) => arr.indexOf(a) === i);
+  return [primaryAccount(), notifyAccount(), ...listed].filter((a, i, arr) => arr.indexOf(a) === i);
 }
 
 // april → masa 切り替え時の表示の連結(/drr グラフとダッシュボードの DRR)。

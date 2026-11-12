@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@vercel/postgres";
 import { encryptSecret } from "@/lib/crypto";
-import { collectAccounts, isValidAccount, primaryAccount } from "@/lib/accounts";
+import { collectAccounts, isValidAccount, notifyAccount, primaryAccount } from "@/lib/accounts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,13 +81,16 @@ export async function GET() {
     order by s.account`;
 
   const primary = primaryAccount();
+  const notify = notifyAccount();
   const collecting = collectAccounts();
   return NextResponse.json({
-    primary, // 出力対象(グラフ・ダッシュボード・Telegram/Discord)
-    collecting, // 毎日 cron で収集するアカウント(BASIS_ACCOUNTS + primary)
+    primary, // 出力対象(/drr グラフ・ダッシュボード)
+    notify, // Telegram / Discord に投稿するアカウント(未設定なら primary)
+    collecting, // 毎日 cron で収集するアカウント(primary + notify + BASIS_ACCOUNTS)
     accounts: rows.map((r) => ({
       ...r,
       primary: r.account === primary,
+      notify: r.account === notify,
       collecting: collecting.includes(r.account),
     })),
     // 収集対象なのに未シードのアカウント(reseed.py --account <name> が必要)

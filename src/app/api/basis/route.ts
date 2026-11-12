@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@vercel/postgres";
-import { collectAccounts, isValidAccount, primaryAccount } from "@/lib/accounts";
+import { collectAccounts, isValidAccount, notifyAccount, primaryAccount } from "@/lib/accounts";
 import {
   ASSETS,
   BasisData,
@@ -50,8 +50,10 @@ type PerAsset = PerAssetInput & {
 // 複数アカウント(src/lib/accounts.ts):
 // - BASIS_ACCOUNTS の各アカウントを primary から順に1つずつ収集し、basis_staking_daily に
 //   account 付きで記録する。1アカウントの失敗は他アカウントの収集に影響させない。
-// - snapshots / daily_rewards(ダッシュボード)と Telegram / Discord 投稿は primary だけ。
+// - snapshots / daily_rewards(ダッシュボード)は primary だけが書く。
+// - Telegram / Discord には BASIS_NOTIFY_ACCOUNT(未設定なら primary)の値を投稿する。
 // - ?account=<name> で特定アカウントだけを実行できる(?dry=1 と併用して収集確認に使う)。
+//   投稿アカウントを ?dry=1 なしで指定すると、cron と同じく投稿もする。
 export async function GET(req: NextRequest) {
   // 任意: CRON_SECRET を設定していれば Vercel Cron の Bearer を検証(未設定なら誰でも実行可)。
   const secret = process.env.CRON_SECRET;
@@ -74,6 +76,7 @@ export async function GET(req: NextRequest) {
   const doNotify = dryRun ? truthy(params.get("notify")) : true;
 
   const primary = primaryAccount();
+  const notify = notifyAccount();
   const requested = params.get("account")?.trim().toLowerCase() || null;
   if (requested && !isValidAccount(requested)) {
     return NextResponse.json({ error: `account が不正: ${requested}` }, { status: 400 });
@@ -108,97 +111,114 @@ export async function GET(req: NextRequest) {
   const others = results.slice(1).map(summarize);
   const isPrimary = main.account === primary;
 
+  // 投稿は投稿アカウントの結果だけで行い、primary(グラフ側)の成否とは独立させる。
+  const { telegram, discord } = await postAssetCard(
+    results.find((r) => r.account === notify),
+    notify,
+    { today, suppress: dryRun && !doNotify } // dry-run 既定は投稿しない(?notify=1 で解除)
+  );
+
   if (!main.ok) {
     return NextResponse.json(
-      { ...main.body, account: main.account, primary: isPrimary, others },
+      { ...main.body, account: main.account, primary: isPrimary, notify_account: notify, telegram, discord, others },
       { status: main.status }
     );
   }
 
   const { rewardDate, profitUsd, totalStakedUsd, totalPnlUsd, totalRewardsPct, perAsset } = main;
-
-  // 追加機能: Asset サマリ画像(PNG)を Telegram / Discord の全ターゲット(env)へ投稿する。
-  // env 未設定なら skip。投稿は付随機能なので、一部/全部が失敗してもデータ記録は成功扱いにする
-  // (結果は telegram / discord フィールドで返す)。投稿するのは primary アカウントのみ。
-  const sendTelegram = telegramConfigured();
-  const sendDiscord = discordConfigured();
-  const suppressNotify = dryRun && !doNotify; // dry-run 既定は投稿しない(?notify=1 で解除)
-  let telegram = suppressNotify && sendTelegram ? "skipped (dry-run)" : "skipped";
-  let discord = suppressNotify && sendDiscord ? "skipped (dry-run)" : "skipped";
-  if (!isPrimary) {
-    if (sendTelegram) telegram = "skipped (not primary)";
-    if (sendDiscord) discord = "skipped (not primary)";
-  }
-  if (isPrimary && !suppressNotify && (sendTelegram || sendDiscord)) {
-    try {
-      const card = buildAssetCard({
-        date: today,
-        totalStakedUsd,
-        totalRewardsUsd: totalPnlUsd,
-        totalRewardsPct,
-        perAsset,
-        yesterdayProfitUsd: rewardDate ? profitUsd : null,
-      });
-      const png = await renderAssetCardPng(card);
-      const caption = assetCardCaption(card);
-
-      if (sendTelegram) {
-        try {
-          const results = await sendTelegramPhoto(png, caption);
-          const sent = results.filter((r) => r.ok).length;
-          const failed = results.filter((r) => !r.ok);
-          telegram =
-            failed.length === 0
-              ? `sent (${sent}/${results.length})`
-              : `partial (${sent}/${results.length}): ` +
-                failed.map((f) => `${formatTarget(f)}: ${f.error}`).join("; ");
-          for (const f of failed) console.error("[telegram] sendPhoto failed:", formatTarget(f), f.error);
-        } catch (e) {
-          telegram = `error: ${e instanceof Error ? e.message : String(e)}`;
-          console.error("[telegram] sendPhoto failed:", e);
-        }
-      }
-
-      if (sendDiscord) {
-        try {
-          const results = await sendDiscordPhoto(png, caption);
-          const sent = results.filter((r) => r.ok).length;
-          const failed = results.filter((r) => !r.ok);
-          discord =
-            failed.length === 0
-              ? `sent (${sent}/${results.length})`
-              : `partial (${sent}/${results.length}): ` +
-                failed.map((f) => `${formatDiscordTarget(f)}: ${f.error}`).join("; ");
-          for (const f of failed) console.error("[discord] webhook failed:", formatDiscordTarget(f), f.error);
-        } catch (e) {
-          discord = `error: ${e instanceof Error ? e.message : String(e)}`;
-          console.error("[discord] webhook failed:", e);
-        }
-      }
-    } catch (e) {
-      const error = `error: ${e instanceof Error ? e.message : String(e)}`;
-      if (sendTelegram) telegram = error;
-      if (sendDiscord) discord = error;
-      console.error("[notify] asset card build/send failed:", e);
-    }
-  }
-
   return NextResponse.json({
     ok: true,
     dry_run: dryRun, // true のとき DB 書き込み・通知(既定)を行っていない
     account: main.account, // 以下のフィールドが指すアカウント
-    primary: isPrimary, // true のときだけ snapshots / daily_rewards 記録と通知を行う
+    primary: isPrimary, // true のときだけ snapshots / daily_rewards を記録する
+    notify_account: notify, // Telegram / Discord に投稿するアカウント
     run_date: today, // 実行日(スナップショットの日付)
     reward_date: rewardDate, // リワードを帰属させた日=前日。初回など未測定時は null
     profit_usd: rewardDate ? profitUsd : null,
     total_staked_usd: round2(totalStakedUsd),
     total_rewards_usd: round2(totalPnlUsd),
     total_rewards_pct: totalRewardsPct,
-    telegram, // sent | skipped | error: ...
-    discord, // sent | skipped | error: ...
+    telegram, // sent | skipped (...) | error: ...(投稿アカウントの結果)
+    discord, // sent | skipped (...) | error: ...(投稿アカウントの結果)
     assets: perAsset,
     others, // primary 以外のアカウントの収集結果(basis_staking_daily のみ記録)
   });
+}
+
+// Asset サマリ画像(PNG)を Telegram / Discord の全ターゲット(env)へ投稿する。
+// env 未設定なら skip。投稿は付随機能なので、一部/全部が失敗してもデータ記録は成功扱いにする
+// (結果は telegram / discord の文字列で返す)。
+// 投稿アカウントがこの実行に含まれない・取得に失敗した日は投稿しない(別アカウントの値で代用しない)。
+async function postAssetCard(
+  r: AccountResult | undefined,
+  notify: string,
+  opts: { today: string; suppress: boolean }
+): Promise<{ telegram: string; discord: string }> {
+  const sendTelegram = telegramConfigured();
+  const sendDiscord = discordConfigured();
+  let telegram = "skipped";
+  let discord = "skipped";
+  const skip = (reason: string) => ({
+    telegram: sendTelegram ? `skipped (${reason})` : telegram,
+    discord: sendDiscord ? `skipped (${reason})` : discord,
+  });
+  if (!sendTelegram && !sendDiscord) return { telegram, discord };
+  if (!r) return skip(`notify account is ${notify}`);
+  if (!r.ok) return skip(`${notify} failed`);
+  if (opts.suppress) return skip("dry-run");
+
+  try {
+    const card = buildAssetCard({
+      date: opts.today,
+      totalStakedUsd: r.totalStakedUsd,
+      totalRewardsUsd: r.totalPnlUsd,
+      totalRewardsPct: r.totalRewardsPct,
+      perAsset: r.perAsset,
+      yesterdayProfitUsd: r.rewardDate ? r.profitUsd : null,
+    });
+    const png = await renderAssetCardPng(card);
+    const caption = assetCardCaption(card);
+
+    if (sendTelegram) {
+      try {
+        const results = await sendTelegramPhoto(png, caption);
+        const sent = results.filter((x) => x.ok).length;
+        const failed = results.filter((x) => !x.ok);
+        telegram =
+          failed.length === 0
+            ? `sent (${sent}/${results.length})`
+            : `partial (${sent}/${results.length}): ` +
+              failed.map((f) => `${formatTarget(f)}: ${f.error}`).join("; ");
+        for (const f of failed) console.error("[telegram] sendPhoto failed:", formatTarget(f), f.error);
+      } catch (e) {
+        telegram = `error: ${e instanceof Error ? e.message : String(e)}`;
+        console.error("[telegram] sendPhoto failed:", e);
+      }
+    }
+
+    if (sendDiscord) {
+      try {
+        const results = await sendDiscordPhoto(png, caption);
+        const sent = results.filter((x) => x.ok).length;
+        const failed = results.filter((x) => !x.ok);
+        discord =
+          failed.length === 0
+            ? `sent (${sent}/${results.length})`
+            : `partial (${sent}/${results.length}): ` +
+              failed.map((f) => `${formatDiscordTarget(f)}: ${f.error}`).join("; ");
+        for (const f of failed) console.error("[discord] webhook failed:", formatDiscordTarget(f), f.error);
+      } catch (e) {
+        discord = `error: ${e instanceof Error ? e.message : String(e)}`;
+        console.error("[discord] webhook failed:", e);
+      }
+    }
+  } catch (e) {
+    const error = `error: ${e instanceof Error ? e.message : String(e)}`;
+    if (sendTelegram) telegram = error;
+    if (sendDiscord) discord = error;
+    console.error("[notify] asset card build/send failed:", e);
+  }
+  return { telegram, discord };
 }
 
 // 1アカウントぶんの取得〜記録。例外はここで捕まえて結果に変換し、他アカウントへ波及させない。
