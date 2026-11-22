@@ -285,6 +285,31 @@ Invoke-RestMethod -Method Post -Uri $env:DISCORD_WEBHOOK_URL -ContentType "appli
 
 > メモ: トークン/Chat ID / Webhook URL を貼り付けた `telegram.txt` 等は `.gitignore` 済み。値は env にのみ置き、コミットしない。
 
+## cron の監視(/api/health)
+
+外部の監視(Grok Bot の Routine 等)が毎朝読む、**読み取り専用**の判定エンドポイント。
+アプリ全体の Basic 認証を外部に渡さずに済むよう、専用の `MONITOR_TOKEN` だけで認証する
+(Basic 認証の対象外。`MONITOR_TOKEN` 未設定なら 503)。
+
+```bash
+curl -H "Authorization: Bearer <MONITOR_TOKEN>" "https://<your-app>.vercel.app/api/health"
+```
+
+- 返り値: `status`(`ok` / `warn` / `ng`)、そのまま報告に使える日本語の `summary`、`checks[]`
+  (`id` / `ok` / `level` / `message` / `impact` / `action`)、`expected_date`、資産別の最新 DRR。
+  認証・設定エラー以外は常に HTTP 200(結果は `status` で判断する)。
+- 判定対象日 `expected_date`: 00:30 UTC 以降は当日、それより前は前日(cron 00:15 UTC + 余裕)。
+- **ng**: 収集対象アカウントが未シード / `needs_reseed`(SESSION_CONFLICT・Privy セッション切れを分類)/
+  当日の記録なし(cron 未実行)、primary の `daily_rewards`(前日分)なし、`market_daily` の当日行なし。
+- **warn**: 当日のリワード差分なし、資産別 DRR が直近 7 日の中央値の 0.5〜1.6 倍から外れる(欠落日の合算等)。
+- 投稿アカウントは「当日の記録ができた = 投稿処理まで到達」までしか判定できない
+  (Telegram / Discord の送信結果は保存していない)。
+- 判定ロジックは `src/lib/health.ts`(DB 非依存の純粋関数)。
+
+セットアップ: `openssl rand -hex 32` で生成した値を Vercel の env(Production)に `MONITOR_TOKEN` として
+設定して再デプロイし、監視側にも同じ値を渡す。監視側には `/api/basis` を呼ばせない(本番実行は記録と
+投稿が走り、`?dry=1` でもトークンがローテーションされる)。
+
 ## TODO / 拡張メモ
 
 - [ ] ファンディングレート列の自動取得(Coinglass APIキー取得後、`src/app/api/market/route.ts` に追記)

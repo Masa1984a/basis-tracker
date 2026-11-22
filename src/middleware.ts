@@ -18,6 +18,11 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // 監視エンドポイント: 専用の MONITOR_TOKEN(Bearer)で route 側が認証する(完全一致のみ)
+  if (pathname === "/api/health") {
+    return NextResponse.next();
+  }
+
   const user = process.env.BASIC_AUTH_USER;
   const pass = process.env.BASIC_AUTH_PASS;
   if (!user || !pass) return NextResponse.next(); // ローカル開発用
