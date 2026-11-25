@@ -94,6 +94,44 @@ DRRの推移と相場(BTC価格)との連動性を観察するための個人用
   (DRR が約 k 倍に見える)。復旧日の cron 成功後に `db/fixups/split_missing_days.sql` の
   アカウントと日付2つ(最後に成功した日 / 復旧した日)を書き換えて Neon SQL Editor で1回実行すると、
   欠落日を合成して k 日に均等割りする(合計は保存。前提が崩れていれば何も変更せず中断)。
+- 2026-11 下旬以降、スマホで basis.pro の april を開くと、DB に入れたセッションが Privy 側で終了する
+  (cron が「Privy refresh のレスポンスにトークンがありません」で失敗)。Mac の専用プロファイルのログインは
+  残るので、スマホで使った後に下の `tools/reseed_auto.py` で再シードする(09:15 JST の cron より前に)。
+
+### 再シード(tools/reseed_auto.py)
+
+日々の再シードは、ログインが不要な限り1コマンドで終わる(手元の Mac で実行。専用 Chromium が一瞬開く)。
+
+```bash
+python3 tools/reseed_auto.py            # april を再シード → 本番の cron と同じ経路で確認まで
+python3 tools/reseed_auto.py --check    # 再シードせず、今のセッションが使えるかだけ確認
+python3 tools/reseed_auto.py --login    # exit 10 のとき: ブラウザでメール + ワンタイムコードでログインして続行
+```
+
+- 流れ: 専用プロファイルでトークン採取 → 純HTTPで更新・取得・メール照合 → `/api/basis/seed` に POST →
+  `/api/basis?account=<name>&dry=1` で確認。どこかで失敗すれば POST しない(または失敗を終了コードで返す)。
+- 本番の記録・投稿(`?dry=1` なしの `/api/basis`)は行わない。今朝の cron が失敗していた場合は `[注意]` を出すだけ。
+- cron の前後(00:05〜00:30 UTC = 09:05〜09:30 JST)は、トークン更新が cron と競合するので実行を拒否する(`--force` で強行)。
+- `.env.local` に `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` / `CRON_SECRET` / `BASIS_LOGIN_EMAIL_<ACCOUNT>`
+  (例 `BASIS_LOGIN_EMAIL_APRIL`。ログイン中のアカウントの確認用)が必要。`SSL_CERT_FILE` の指定は不要。
+- 最後の行に `RESULT=<名前> exit=<番号>` を出す。
+
+| exit | RESULT | 意味 / 次の操作 |
+|---|---|---|
+| 0 | OK | 完了(`--check`: セッションは有効) |
+| 2 | CONFIG | `.env.local` の不足・引数の誤り・プロファイルが無い |
+| 3 | CRON_WINDOW | cron の前後なので中止 → 09:30 JST 以降に再実行 |
+| 10 | LOGIN_REQUIRED | **ログインが必要**(メール + ワンタイムコード)→ `--login` で再実行 |
+| 11 | WRONG_ACCOUNT | プロファイルが別アカウントでログイン中 → `--login` で正しいアカウントに |
+| 12 | BROWSER_TIMEOUT | ログイン状態を判定できなかった(表示・通信の遅れ)→ 再実行 |
+| 20 | REFRESH_FAILED | トークン更新に失敗(Privy のセッション終了を含む)→ `--login` で再実行 |
+| 21 | BASIS_API_FAILED | basis の API 取得に失敗 → 少し待って再実行 |
+| 30 | SEED_FAILED | `/api/basis/seed` への登録に失敗 → Basic 認証と URL を確認 |
+| 40 | VERIFY_FAILED | 登録後の本番確認(dry-run)に失敗 → 再実行 |
+| 50 | SESSION_INVALID | (`--check`)セッションが無効 → 引数なしで再シード |
+| 1 | UNEXPECTED | 想定外のエラー |
+
+従来の `tools/reseed.py`(ログインを待つ対話型)もそのまま使える。
 
 ### 手動テスト(dry-run / 記録・投稿なし)
 

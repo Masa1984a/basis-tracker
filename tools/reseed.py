@@ -18,7 +18,7 @@
     それ以外(masa 等): .pw-basis-profile-<name>/  debug/session_secrets-<name>.json
   --expect-email を付けると、ログイン中の Privy ユーザーのメールが一致しない場合に POST せず中断する。
 """
-import argparse, base64, json, re, sys, time, urllib.request, urllib.error, ssl
+import argparse, base64, json, os, re, sys, time, urllib.request, urllib.error, ssl
 from pathlib import Path
 
 for _s in (sys.stdout, sys.stderr):
@@ -54,7 +54,17 @@ def user_emails(user):
                 out.append(v.lower())
     return out
 APP_ID = "cmo84wtol002q0cihr61zf6gg"
-CTX = ssl.create_default_context()
+
+
+def _ssl_context():
+    # python.org 版の macOS Python は既定の CA ストアを持たず CERTIFICATE_VERIFY_FAILED になるため、
+    # SSL_CERT_FILE 未指定ならシステムの CA バンドル(/etc/ssl/cert.pem)を使う。
+    if not os.environ.get("SSL_CERT_FILE") and os.path.exists("/etc/ssl/cert.pem"):
+        return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+    return ssl.create_default_context()
+
+
+CTX = _ssl_context()
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 
 
@@ -110,9 +120,45 @@ def wait_for_login(page, got, wait_s):
             print(f"[hb] 待機中… url={url} sid={'yes' if got['sid'] else 'no'} 残り{int(deadline - time.time())}s", flush=True)
 
 
-def extract(wait_s):
+LOGGED_OUT_TEXTS = ("Access Required", "one-time 6-digit code")  # 未ログイン時の basis.pro の表示
+
+
+def wait_for_session(page, got, timeout_s):
+    """非対話モード用: ログイン待ちをせず、認証付き API 呼び出し(= got['sid'])が出るのを待つ。
+    未ログイン(localStorage に privy:refresh_token が無く、ログイン画面の文言が出ている)が
+    2 回続けて確認できたら got['login_required'] を立てて即座に戻る(URL だけでは判定しない)。
+    timeout_s 内にどちらにもならなければ got['timeout'] を立てる。"""
+    deadline = time.time() + timeout_s
+    logged_out_streak = 0
+    while time.time() < deadline:
+        if got["sid"]:
+            return
+        try:
+            has_refresh = page.evaluate("() => localStorage.getItem('privy:refresh_token') !== null")
+            text = page.evaluate("() => document.body ? document.body.innerText : ''")
+        except Exception:
+            has_refresh, text = True, ""  # 遷移中などで読めないときは判定しない
+        if not has_refresh and any(t in text for t in LOGGED_OUT_TEXTS):
+            logged_out_streak += 1
+            if logged_out_streak >= 2:
+                got["login_required"] = True
+                return
+        else:
+            logged_out_streak = 0
+        try:
+            page.wait_for_timeout(2000)  # Playwright イベントをポンプ(on_response を発火させる)
+        except Exception as e:
+            print(f"[warn] 待機中にブラウザ/ページが閉じられました: {e}", flush=True)
+            break
+    if not got["sid"]:
+        got["timeout"] = True
+
+
+def extract(wait_s, interactive=True, timeout_s=90):
+    """interactive=False のときはログインを待たない(未ログイン/タイムアウトは got に印を付けて返す)。
+    認証付き呼び出しを採取できなかったときは secrets ファイルを上書きしない(前回分を空で潰さない)。"""
     secrets = {"privy": {}, "basis": {}, "captured_headers": {}}
-    got = {"sessions": False, "sid": False}
+    got = {"sessions": False, "sid": False, "login_required": False, "timeout": False}
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE), headless=False, no_viewport=True,
@@ -141,12 +187,19 @@ def extract(wait_s):
             except Exception: pass
 
         page.on("response", on_response)
-        print("[i] /asset を開きます。未ログインなら画面でログインし、表示できたら Enter。", flush=True)
+        print("[i] /asset を開きます。" + ("未ログインなら画面でログインし、表示できたら Enter。" if interactive
+                                         else "ログイン状態を確認します(ログインは待ちません)。"), flush=True)
         try: page.goto("https://basis.pro/asset", wait_until="networkidle", timeout=60000)
         except Exception as e: print(f"[warn] goto: {e}", flush=True)
         page.wait_for_timeout(3000)
 
-        # まだ認証付き呼び出しが無ければログイン待ち
+        # まだ認証付き呼び出しが無ければログイン待ち(非対話モードは待たずに判定だけする)
+        if not got["sid"] and not interactive:
+            wait_for_session(page, got, timeout_s)
+            if not got["sid"]:
+                try: ctx.close()
+                except Exception: pass
+                return secrets, got
         if not got["sid"]:
             print("=" * 60 + "\n[操作] ログイン後 /asset を表示し、Enter を押してください。\n" + "=" * 60, flush=True)
             try:
@@ -168,8 +221,9 @@ def extract(wait_s):
         except Exception: pass
         try: ctx.close()
         except Exception: pass
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(secrets, ensure_ascii=False, indent=2), encoding="utf-8")
+    if got["sid"]:
+        OUT.parent.mkdir(parents=True, exist_ok=True)
+        OUT.write_text(json.dumps(secrets, ensure_ascii=False, indent=2), encoding="utf-8")
     return secrets, got
 
 
@@ -178,12 +232,15 @@ def save(secrets):
 
 
 def verify(secrets, expect_email=None):
+    """純HTTPで [refresh → データ取得] を再現する。(ok, reason) を返す。
+    reason: ok / no_refresh_token / refresh_failed / refresh_no_tokens / wrong_account /
+            no_app_token / api_failed(ok 以外では POST しないこと)"""
     privy = secrets["privy"]; basis = secrets["basis"]
     ls = privy.get("from_localStorage", {})
     refresh_token = privy.get("refresh_token") or ls.get("privy:refresh_token")
     pat = privy.get("privy_access_token") or ls.get("privy:token")
     if not refresh_token:
-        print("✗ refresh_token を採取できず。ログイン状態を確認して再実行。"); return False
+        print("✗ refresh_token を採取できず。ログイン状態を確認して再実行。"); return False, "no_refresh_token"
 
     tmpl = secrets.get("captured_headers", {}).get("privy_sessions", {})
     sh = {"accept": "application/json", "content-type": "application/json", "privy-app-id": APP_ID,
@@ -196,8 +253,13 @@ def verify(secrets, expect_email=None):
     st, body = http("POST", "https://auth.privy.io/api/v1/sessions", sh, {"refresh_token": refresh_token})
     print(f"   -> {st}")
     if not (st and st < 300):
-        print("   body:", body[:200]); return False
+        print("   body:", body[:200]); return False, "refresh_failed"
     j = json.loads(body)
+    # 200 でもトークンが無い応答は Privy 側でセッションが終了している(cron の
+    # 「Privy refresh のレスポンスにトークンがありません」と同じ)。古いトークンのまま進めない。
+    if not (j.get("refresh_token") and j.get("privy_access_token")):
+        print("✗ /sessions の応答に refresh_token / privy_access_token が無い(Privy のセッション終了)。")
+        return False, "refresh_no_tokens"
     # 回転した refresh_token を即保存
     if j.get("refresh_token"):
         privy["refresh_token"] = j["refresh_token"]
@@ -213,7 +275,7 @@ def verify(secrets, expect_email=None):
         if expect_email.strip().lower() not in emails:
             print(f"✗ --expect-email {expect_email} と一致しません。別アカウントでログインしている可能性。"
                   " POST せず中断します(このプロファイルでログインし直して再実行)。")
-            return False
+            return False, "wrong_account"
         print(f"   ✓ --expect-email と一致")
 
     # basis 用トークン = aud==APP_ID のもの を自動選別
@@ -232,7 +294,7 @@ def verify(secrets, expect_email=None):
 
     sid = basis.get("session_id")
     if not (app_token and sid):
-        print("✗ app_token か session_id が無い。"); return False
+        print("✗ app_token か session_id が無い。"); return False, "no_app_token"
 
     print("\n=== [2] データ取得(refresh済みトークン + 再利用 session_id)===")
     bh = {"accept": "application/json, text/plain, */*", "authorization": f"Bearer {app_token}",
@@ -251,7 +313,7 @@ def verify(secrets, expect_email=None):
                     print(f"        {a}: staked={d['total_staked']} pnl={d['total_pnl']} roi={d['daily_roi']}%")
     if ok_all:
         print("\n✅ Path B 全連鎖を refresh 後トークンで再現(=Vercel Cron 流れの実証)")
-    return ok_all
+    return (True, "ok") if ok_all else (False, "api_failed")
 
 
 def main():
@@ -286,10 +348,11 @@ def main():
         secrets, got = extract(a.wait)
         if not got["sid"]:
             print("✗ 認証付き呼び出しを検出できず(未ログインの可能性)。"); sys.exit(1)
-    ok = verify(secrets, a.expect_email)
+    ok, _reason = verify(secrets, a.expect_email)
 
     if ok and a.post_url:
-        post_seed(secrets, a.post_url, account)
+        st, _body = post_seed(secrets, a.post_url, account)
+        ok = st == 200
     sys.exit(0 if ok else 1)
 
 
@@ -314,6 +377,7 @@ def post_seed(secrets, base_url, account):
         headers["authorization"] = "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()
     st, body = http("POST", base_url.rstrip("/") + "/api/basis/seed", headers, payload)
     print(f"\n=== seed POST -> {st} {body[:200]}")
+    return st, body
 
 
 if __name__ == "__main__":
